@@ -1,0 +1,50 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.venv/
+venv/
+ENV/
+env/
+
+# Testing and type-checking
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Tooling and logs
+.uv/
+.cache/
+*.log
+
+# Local runtime data
+data/
+pgdata/
+*.sqlite3
+*.db
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Internal project documents
+PRD.md
+AGENTS.md
