@@ -191,8 +191,13 @@ def rank_jobs(
     jobs: list[RawJob],
     criteria: SearchCriteria,
     weights: ScoringWeights,
+    min_score: float = 60.0,
 ) -> list[ScoredJob]:
-    scored = [score_job(profile, job, criteria, weights) for job in jobs]
+    scored = [
+        item
+        for item in (score_job(profile, job, criteria, weights) for job in jobs)
+        if item.score >= min_score
+    ]
     scored.sort(
         key=lambda item: (
             -item.score,

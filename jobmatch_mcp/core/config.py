@@ -49,8 +49,9 @@ class Settings(BaseSettings):
     jsearch_country: str = "in"
 
     http_timeout_seconds: float = Field(default=10.0, gt=0.0)
-    search_default_limit: int = Field(default=10, ge=1, le=50)
-    search_max_limit: int = Field(default=50, ge=1, le=100)
+    search_default_limit: int = Field(default=30, ge=1, le=30)
+    search_max_limit: int = Field(default=30, ge=1, le=30)
+    min_match_score: float = Field(default=60.0, ge=60.0, le=100.0)
     max_resume_bytes: int = Field(default=5_000_000, ge=1)
     max_job_description_chars: int = Field(default=5_000, ge=100)
 

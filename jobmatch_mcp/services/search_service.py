@@ -40,9 +40,11 @@ class SearchService:
         self,
         registry: ConnectorRegistry,
         match_service: MatchService,
+        max_results: int = 30,
     ) -> None:
         self._registry = registry
         self._match_service = match_service
+        self._max_results = max_results
 
     async def search(
         self,
@@ -92,8 +94,19 @@ class SearchService:
         if not unique_jobs:
             warnings.append("No postings were returned for these criteria.")
 
-        stored = await upsert_jobs(session, unique_jobs)
-        ranked = self._match_service.rank(profile, unique_jobs, criteria)[: criteria.limit]
+        eligible = self._match_service.rank(profile, unique_jobs, criteria)
+        if unique_jobs and not eligible:
+            warnings.append(
+                f"No postings met the {self._match_service.min_score:g} minimum match score."
+            )
+        elif len(eligible) < len(unique_jobs):
+            warnings.append(
+                f"Excluded {len(unique_jobs) - len(eligible)} postings below the "
+                f"{self._match_service.min_score:g} minimum match score."
+            )
+
+        ranked = eligible[: min(criteria.limit, self._max_results)]
+        stored = await upsert_jobs(session, [item.job for item in ranked])
 
         search = await create_search(session, user.id, resume.id, criteria)
         match_rows: list[tuple[UUID, float, dict[str, Any], str, int]] = []

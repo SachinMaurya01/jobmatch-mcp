@@ -114,6 +114,22 @@ def test_ranking_is_descending() -> None:
         salary_max=30_000,
         description="PHP and MySQL. 1 year of experience.",
     )
-    ranked = rank_jobs(PROFILE, [weak, strong], full_criteria(), ScoringWeights())
+    ranked = rank_jobs(PROFILE, [weak, strong], full_criteria(), ScoringWeights(), min_score=0)
     assert [item.job.external_id for item in ranked] == ["strong", "weak"]
     assert ranked[0].score >= ranked[1].score
+
+
+def test_jobs_below_minimum_score_are_excluded() -> None:
+    strong = make_job(external_id="strong")
+    weak = make_job(
+        external_id="weak",
+        title="Junior PHP Developer",
+        location="Pune, India",
+        remote=False,
+        salary_min=20_000,
+        salary_max=30_000,
+        description="PHP and MySQL. 1 year of experience.",
+    )
+    ranked = rank_jobs(PROFILE, [weak, strong], full_criteria(), ScoringWeights())
+    assert [item.job.external_id for item in ranked] == ["strong"]
+    assert all(item.score >= 60 for item in ranked)

@@ -24,6 +24,9 @@ services:
       JOBMATCH_DATABASE_URL: postgresql+psycopg://jobmatch:jobmatch@postgres:5432/jobmatch
       JOBMATCH_JSEARCH_API_KEY: ${JOBMATCH_JSEARCH_API_KEY:-}
       JOBMATCH_JSEARCH_COUNTRY: ${JOBMATCH_JSEARCH_COUNTRY:-in}
+      JOBMATCH_SEARCH_DEFAULT_LIMIT: ${JOBMATCH_SEARCH_DEFAULT_LIMIT:-30}
+      JOBMATCH_SEARCH_MAX_LIMIT: ${JOBMATCH_SEARCH_MAX_LIMIT:-30}
+      JOBMATCH_MIN_MATCH_SCORE: ${JOBMATCH_MIN_MATCH_SCORE:-60}
     depends_on:
       postgres:
         condition: service_healthy

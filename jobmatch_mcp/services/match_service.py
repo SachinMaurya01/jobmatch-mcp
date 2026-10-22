@@ -8,8 +8,13 @@ from jobmatch_mcp.schemas import RawJob, ResumeProfile, SearchCriteria
 
 
 class MatchService:
-    def __init__(self, weights: ScoringWeights) -> None:
+    def __init__(self, weights: ScoringWeights, min_score: float = 60.0) -> None:
         self._weights = weights
+        self._min_score = min_score
+
+    @property
+    def min_score(self) -> float:
+        return self._min_score
 
     def rank(
         self,
@@ -17,4 +22,4 @@ class MatchService:
         jobs: list[RawJob],
         criteria: SearchCriteria,
     ) -> list[ScoredJob]:
-        return rank_jobs(profile, jobs, criteria, self._weights)
+        return rank_jobs(profile, jobs, criteria, self._weights, self._min_score)

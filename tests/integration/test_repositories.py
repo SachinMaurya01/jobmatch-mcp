@@ -37,6 +37,9 @@ def database_url() -> Iterator[str]:
         pytest.skip("JOBMATCH_TEST_DATABASE_URL is not set")
 
     os.environ["JOBMATCH_DATABASE_URL"] = url
+    os.environ["JOBMATCH_SEARCH_DEFAULT_LIMIT"] = "30"
+    os.environ["JOBMATCH_SEARCH_MAX_LIMIT"] = "30"
+    os.environ["JOBMATCH_MIN_MATCH_SCORE"] = "60"
     get_settings.cache_clear()
 
     config = Config("alembic.ini")

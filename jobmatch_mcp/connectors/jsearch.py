@@ -115,7 +115,8 @@ class JSearchConnector(JobConnector):
         return " ".join(part for part in parts if part).strip() or "jobs"
 
     def _build_params(self, criteria: SearchCriteria) -> dict[str, str | int]:
-        pages = max(1, min((criteria.limit + 9) // 10, 20))
+        # Each page holds up to 10 postings; never fan out past 30 per request.
+        pages = max(1, min((criteria.limit + 9) // 10, 3))
         params: dict[str, str | int] = {
             "query": self._build_query(criteria),
             "num_pages": pages,

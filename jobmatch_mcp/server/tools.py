@@ -66,8 +66,9 @@ async def search_jobs(
     """Search enabled job sources, score each posting against the latest resume,
     and return a ranked list with a score (0-100) and score breakdown.
 
-    Load a resume with `parse_resume` first. If `limit` exceeds the configured
-    maximum it is clamped.
+    Load a resume with `parse_resume` first. Jobs scoring below the configured
+    minimum (default 60) are excluded, and at most 30 jobs are returned. If
+    `limit` exceeds the configured maximum it is clamped.
     """
     settings = get_settings()
     effective_limit = limit if limit is not None else settings.search_default_limit
@@ -101,7 +102,8 @@ async def search_jobs(
         )
         service = SearchService(
             registry=get_registry(),
-            match_service=MatchService(settings.scoring_weights),
+            match_service=MatchService(settings.scoring_weights, settings.min_match_score),
+            max_results=settings.search_max_limit,
         )
         async with session_scope() as session:
             result = await service.search(session, criteria, sources)

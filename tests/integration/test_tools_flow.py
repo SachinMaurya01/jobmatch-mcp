@@ -36,6 +36,9 @@ def database_url() -> Iterator[str]:
         pytest.skip("JOBMATCH_TEST_DATABASE_URL is not set")
 
     os.environ["JOBMATCH_DATABASE_URL"] = url
+    os.environ["JOBMATCH_SEARCH_DEFAULT_LIMIT"] = "30"
+    os.environ["JOBMATCH_SEARCH_MAX_LIMIT"] = "30"
+    os.environ["JOBMATCH_MIN_MATCH_SCORE"] = "60"
     get_settings.cache_clear()
 
     config = Config("alembic.ini")
@@ -68,7 +71,21 @@ class FakeConnector(JobConnector):
                 dedupe_key=normalize_dedupe_key(
                     "Senior Python Engineer", "Acme", "Bengaluru, India"
                 ),
-            )
+            ),
+            RawJob(
+                source=self.name,
+                external_id="job-2",
+                title="Junior PHP Developer",
+                company="Acme",
+                location="Pune, India",
+                remote=False,
+                salary_min=20_000,
+                salary_max=30_000,
+                description="PHP and MySQL. 1 year of experience.",
+                url="https://example.com/jobs/job-2",
+                posted_at=None,
+                dedupe_key=normalize_dedupe_key("Junior PHP Developer", "Acme", "Pune, India"),
+            ),
         ]
 
     async def health(self) -> ConnectorHealth:
@@ -90,9 +107,15 @@ async def test_parse_search_and_details(database_url: str, monkeypatch: pytest.M
 
     search = await tools.search_jobs(query="python", locations=["Bengaluru"], limit=5)
     assert search.count == 1
+    assert [result.title for result in search.results] == ["Senior Python Engineer"]
     assert search.results[0].score == 100
     assert search.results[0].rank == 1
     assert search.results[0].url == "https://example.com/jobs/job-1"
+    assert any("minimum match score" in warning for warning in search.warnings)
+
+    async with get_session_factory()() as session:
+        stored_jobs = (await session.execute(text("SELECT count(*) FROM jobs"))).scalar_one()
+    assert stored_jobs == 1
 
     details = await tools.get_job_details(search.results[0].job_id)
     assert details.job.title == "Senior Python Engineer"

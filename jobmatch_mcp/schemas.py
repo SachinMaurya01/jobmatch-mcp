@@ -55,7 +55,7 @@ class SearchCriteria(BaseModel):
     locations: list[str] = Field(default_factory=list)
     remote: bool | None = None
     min_salary: float | None = None
-    limit: int = 10
+    limit: int = Field(default=30, ge=1, le=30)
 
 
 class ComponentScore(BaseModel):
@@ -76,7 +76,7 @@ class ScoreBreakdown(BaseModel):
 class RankedJob(BaseModel):
     job_id: UUID
     rank: int
-    score: float = Field(ge=0.0, le=100.0)
+    score: float = Field(ge=60.0, le=100.0)
     title: str
     company: str
     location: str | None = None

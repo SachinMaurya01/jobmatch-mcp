@@ -12,7 +12,8 @@ mcp = FastMCP(
         "JobMatch ranks job postings against a locally stored resume. "
         "Call parse_resume before search_jobs. Scores are deterministic and "
         "structured in Phase 1; each result includes a 0-100 score, a "
-        "breakdown, and a link to the original posting."
+        "breakdown, and a link to the original posting. Jobs below a 60 match "
+        "score are excluded, and each search returns at most 30 jobs."
     ),
 )
 
