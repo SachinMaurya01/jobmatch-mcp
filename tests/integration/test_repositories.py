@@ -68,7 +68,7 @@ async def test_resume_job_search_roundtrip(database_url: str) -> None:
         assert latest.parsed_profile["skills"] == ["Python", "PostgreSQL"]
 
         job = RawJob(
-            source="adzuna",
+            source="jsearch",
             external_id="42",
             title="Senior Python Engineer",
             company="Acme",
@@ -82,13 +82,13 @@ async def test_resume_job_search_roundtrip(database_url: str) -> None:
             dedupe_key=normalize_dedupe_key("Senior Python Engineer", "Acme", "Bengaluru, India"),
         )
         stored = await upsert_jobs(session, [job])
-        row = stored[("adzuna", "42")]
+        row = stored[("jsearch", "42")]
         assert row.title == "Senior Python Engineer"
 
         updated = job.model_copy(update={"title": "Staff Python Engineer"})
         stored_again = await upsert_jobs(session, [updated])
-        assert stored_again[("adzuna", "42")].id == row.id
-        assert stored_again[("adzuna", "42")].title == "Staff Python Engineer"
+        assert stored_again[("jsearch", "42")].id == row.id
+        assert stored_again[("jsearch", "42")].title == "Staff Python Engineer"
 
         fetched = await get_job(session, row.id)
         assert fetched is not None

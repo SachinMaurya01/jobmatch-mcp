@@ -33,7 +33,7 @@ def make_job(
     description: str = DESCRIPTION,
 ) -> RawJob:
     return RawJob(
-        source="adzuna",
+        source="jsearch",
         external_id=external_id,
         title=title,
         company="Acme",

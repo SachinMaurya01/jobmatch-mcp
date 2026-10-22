@@ -8,19 +8,17 @@ from pydantic import ValidationError
 from jobmatch_mcp.core.config import ScoringWeights, Settings
 
 
-def test_defaults_and_adzuna_flag() -> None:
+def test_defaults_and_jsearch_flag() -> None:
     settings = Settings(_env_file=None)
     assert settings.search_default_limit == 10
     assert settings.search_max_limit == 50
     assert settings.disable_hosted_fallback is True
-    assert settings.adzuna_configured is False
+    assert settings.jsearch_configured is False
 
 
-def test_adzuna_configured_requires_both_values() -> None:
-    assert Settings(_env_file=None, adzuna_app_id="id").adzuna_configured is False
-    assert (
-        Settings(_env_file=None, adzuna_app_id="id", adzuna_app_key="key").adzuna_configured is True
-    )
+def test_jsearch_configured_requires_api_key() -> None:
+    assert Settings(_env_file=None, jsearch_api_key="key").jsearch_configured is True
+    assert Settings(_env_file=None, jsearch_api_key="").jsearch_configured is False
 
 
 def test_rejects_default_limit_above_max() -> None:

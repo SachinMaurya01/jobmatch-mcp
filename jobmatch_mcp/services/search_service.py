@@ -59,8 +59,8 @@ class SearchService:
         connectors = self._registry.select(sources)
         if not connectors:
             raise ConfigurationError(
-                "No job sources are enabled. Configure Adzuna credentials in the "
-                "environment to enable the Adzuna connector."
+                "No job sources are enabled. Set JOBMATCH_JSEARCH_API_KEY to enable "
+                "the JSearch connector."
             )
 
         results = await asyncio.gather(

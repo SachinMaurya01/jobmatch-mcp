@@ -1,7 +1,7 @@
 [project]
 name = "jobmatch-mcp"
 version = "0.1.0"
-description = "MCP server that ranks job postings against a resume (Phase 1)"
+description = "MCP server that ranks job postings against a resume"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.14,<2",

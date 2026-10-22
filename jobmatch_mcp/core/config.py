@@ -43,10 +43,10 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://jobmatch:jobmatch@localhost:5432/jobmatch"
 
-    adzuna_app_id: str | None = None
-    adzuna_app_key: str | None = None
-    adzuna_country: str = "in"
-    adzuna_base_url: str = "https://api.adzuna.com/v1/api/jobs"
+    jsearch_api_key: str | None = None
+    jsearch_api_host: str = "jsearch.p.rapidapi.com"
+    jsearch_base_url: str = "https://jsearch.p.rapidapi.com"
+    jsearch_country: str = "in"
 
     http_timeout_seconds: float = Field(default=10.0, gt=0.0)
     search_default_limit: int = Field(default=10, ge=1, le=50)
@@ -65,8 +65,8 @@ class Settings(BaseSettings):
         return self
 
     @property
-    def adzuna_configured(self) -> bool:
-        return bool(self.adzuna_app_id and self.adzuna_app_key)
+    def jsearch_configured(self) -> bool:
+        return bool(self.jsearch_api_key)
 
 
 @lru_cache(maxsize=1)

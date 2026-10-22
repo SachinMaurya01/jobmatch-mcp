@@ -22,9 +22,8 @@ services:
     tty: true
     environment:
       JOBMATCH_DATABASE_URL: postgresql+psycopg://jobmatch:jobmatch@postgres:5432/jobmatch
-      JOBMATCH_ADZUNA_APP_ID: ${JOBMATCH_ADZUNA_APP_ID:-}
-      JOBMATCH_ADZUNA_APP_KEY: ${JOBMATCH_ADZUNA_APP_KEY:-}
-      JOBMATCH_ADZUNA_COUNTRY: ${JOBMATCH_ADZUNA_COUNTRY:-in}
+      JOBMATCH_JSEARCH_API_KEY: ${JOBMATCH_JSEARCH_API_KEY:-}
+      JOBMATCH_JSEARCH_COUNTRY: ${JOBMATCH_JSEARCH_COUNTRY:-in}
     depends_on:
       postgres:
         condition: service_healthy

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from jobmatch_mcp.connectors.adzuna import AdzunaConnector
 from jobmatch_mcp.connectors.base import JobConnector
+from jobmatch_mcp.connectors.jsearch import JSearchConnector
 from jobmatch_mcp.core.config import Settings
 from jobmatch_mcp.core.errors import InvalidInputError
 
@@ -17,8 +17,8 @@ class ConnectorRegistry:
     @classmethod
     def from_settings(cls, settings: Settings) -> ConnectorRegistry:
         connectors: list[JobConnector] = []
-        if settings.adzuna_configured:
-            connectors.append(AdzunaConnector(settings))
+        if settings.jsearch_configured:
+            connectors.append(JSearchConnector(settings))
         return cls(connectors)
 
     @property
