@@ -1,4 +1,4 @@
-"""Async repositories for Phase 1 persistence."""
+"""Async repositories for persistence."""
 
 from __future__ import annotations
 
@@ -10,8 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jobmatch_mcp.db.models import Job, Match, Resume, Search, User
-from jobmatch_mcp.schemas import JobRecord, RawJob, ResumeProfile, SearchCriteria
+from jobmatch_mcp.db.models import Job, LLMCall, Match, Resume, Search, User
+from jobmatch_mcp.schemas import (
+    JobRecord,
+    LLMCallRecord,
+    RawJob,
+    ResumeProfile,
+    SearchCriteria,
+)
 
 
 async def get_or_create_default_user(session: AsyncSession) -> User:
@@ -29,11 +35,16 @@ async def create_resume(
     user_id: UUID,
     raw_text: str,
     profile: ResumeProfile,
+    *,
+    embedding: list[float] | None = None,
+    embedding_model: str | None = None,
 ) -> Resume:
     resume = Resume(
         user_id=user_id,
         raw_text=raw_text,
         parsed_profile=profile.model_dump(mode="json"),
+        embedding=embedding,
+        embedding_model=embedding_model,
     )
     session.add(resume)
     await session.flush()
@@ -46,10 +57,40 @@ async def get_latest_resume(session: AsyncSession, user_id: UUID) -> Resume | No
     )
 
 
+async def update_resume_embedding(
+    session: AsyncSession,
+    resume_id: UUID,
+    embedding: list[float],
+    embedding_model: str,
+) -> None:
+    resume = await session.get(Resume, resume_id)
+    if resume is None:
+        return
+    resume.embedding = embedding
+    resume.embedding_model = embedding_model
+    await session.flush()
+
+
 async def upsert_jobs(session: AsyncSession, jobs: Sequence[RawJob]) -> dict[tuple[str, str], Job]:
     """Insert or refresh postings keyed by (source, external_id)."""
     ids: list[UUID] = []
     for job in jobs:
+        update_values: dict[str, Any] = {
+            "title": job.title,
+            "company": job.company,
+            "location": job.location,
+            "remote": job.remote,
+            "salary_min": job.salary_min,
+            "salary_max": job.salary_max,
+            "description": job.description,
+            "url": job.url,
+            "posted_at": job.posted_at,
+            "dedupe_key": job.dedupe_key,
+        }
+        if job.embedding is not None:
+            update_values["embedding"] = job.embedding
+            update_values["embedding_model"] = job.embedding_model
+
         stmt = (
             insert(Job)
             .values(
@@ -65,21 +106,12 @@ async def upsert_jobs(session: AsyncSession, jobs: Sequence[RawJob]) -> dict[tup
                 url=job.url,
                 posted_at=job.posted_at,
                 dedupe_key=job.dedupe_key,
+                embedding=job.embedding,
+                embedding_model=job.embedding_model,
             )
             .on_conflict_do_update(
                 index_elements=["source", "external_id"],
-                set_={
-                    "title": job.title,
-                    "company": job.company,
-                    "location": job.location,
-                    "remote": job.remote,
-                    "salary_min": job.salary_min,
-                    "salary_max": job.salary_max,
-                    "description": job.description,
-                    "url": job.url,
-                    "posted_at": job.posted_at,
-                    "dedupe_key": job.dedupe_key,
-                },
+                set_=update_values,
             )
             .returning(Job.id)
         )
@@ -138,6 +170,67 @@ async def create_matches(
         ]
     )
     await session.flush()
+
+
+async def get_latest_match_for_job(
+    session: AsyncSession, user_id: UUID, job_id: UUID
+) -> tuple[Match, Search] | None:
+    row = (
+        await session.execute(
+            select(Match, Search)
+            .join(Search, Match.search_id == Search.id)
+            .where(Search.user_id == user_id, Match.job_id == job_id)
+            .order_by(Search.created_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    return row[0], row[1]
+
+
+async def create_llm_calls(session: AsyncSession, calls: Sequence[LLMCallRecord]) -> None:
+    session.add_all(
+        [
+            LLMCall(
+                provider=call.provider,
+                model=call.model,
+                latency_ms=call.latency_ms,
+                tokens_in=call.tokens_in,
+                tokens_out=call.tokens_out,
+                cost_estimate=call.cost_estimate,
+                status=call.status,
+                fallback_reason=call.fallback_reason,
+            )
+            for call in calls
+        ]
+    )
+    await session.flush()
+
+
+async def get_recent_llm_calls(session: AsyncSession, limit: int = 20) -> list[LLMCall]:
+    return list(
+        (
+            await session.scalars(
+                select(LLMCall).order_by(LLMCall.created_at.desc()).limit(limit)
+            )
+        ).all()
+    )
+
+
+def to_llm_call_record(call: LLMCall) -> LLMCallRecord:
+    return LLMCallRecord(
+        id=call.id,
+        provider=call.provider,
+        model=call.model,
+        latency_ms=call.latency_ms,
+        tokens_in=call.tokens_in,
+        tokens_out=call.tokens_out,
+        cost_estimate=call.cost_estimate,
+        status=call.status,
+        fallback_reason=call.fallback_reason,
+        created_at=call.created_at,
+    )
 
 
 def to_job_record(job: Job) -> JobRecord:

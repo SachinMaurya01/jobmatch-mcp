@@ -19,10 +19,12 @@ from jobmatch_mcp.core.errors import (
 )
 from jobmatch_mcp.core.logging import get_logger
 from jobmatch_mcp.db.repositories import (
+    create_llm_calls,
     create_matches,
     create_search,
     get_latest_resume,
     get_or_create_default_user,
+    update_resume_embedding,
     upsert_jobs,
 )
 from jobmatch_mcp.matching.dedupe import dedupe_jobs
@@ -33,7 +35,9 @@ from jobmatch_mcp.schemas import (
     SearchCriteria,
     SearchJobsOutput,
 )
+from jobmatch_mcp.services.embedding_service import EmbeddingService
 from jobmatch_mcp.services.match_service import MatchService
+from jobmatch_mcp.services.rerank_service import RerankService
 
 logger = get_logger(__name__)
 
@@ -46,10 +50,15 @@ class SearchService:
         registry: ConnectorRegistry,
         match_service: MatchService,
         max_results: int = 30,
+        *,
+        embedding_service: EmbeddingService | None = None,
+        rerank_service: RerankService | None = None,
     ) -> None:
         self._registry = registry
         self._match_service = match_service
         self._max_results = max_results
+        self._embedding_service = embedding_service
+        self._rerank_service = rerank_service
 
     async def search(
         self,
@@ -127,8 +136,43 @@ class SearchService:
         if not unique_jobs:
             warnings.append("No postings were returned for these criteria.")
 
-        await self._notify(progress, 80, 100, "Scoring and ranking matches")
-        eligible = self._match_service.rank(profile, unique_jobs, criteria)
+        resume_embedding = resume.embedding
+        resume_embedding_model = resume.embedding_model
+        job_embeddings: dict[str, list[float]] | None = None
+        embedding_model: str | None = None
+
+        if self._embedding_service is not None and unique_jobs:
+            expected_model = self._embedding_service.model
+            if resume_embedding is None or resume_embedding_model != expected_model:
+                await self._notify(progress, 74, 100, "Embedding resume")
+                vector, embedding_warnings = await self._embedding_service.embed_resume(
+                    resume.raw_text
+                )
+                warnings.extend(embedding_warnings)
+                if vector is not None:
+                    resume_embedding = vector
+                    resume_embedding_model = expected_model
+                    await update_resume_embedding(
+                        session, resume.id, vector, expected_model
+                    )
+
+            if resume_embedding is not None and resume_embedding_model == expected_model:
+                await self._notify(progress, 78, 100, "Embedding postings")
+                outcome = await self._embedding_service.embed_jobs(unique_jobs)
+                warnings.extend(outcome.warnings)
+                job_embeddings = outcome.embeddings
+                embedding_model = expected_model
+
+        await self._notify(progress, 82, 100, "Scoring and ranking matches")
+        eligible = self._match_service.rank(
+            profile,
+            unique_jobs,
+            criteria,
+            resume_embedding=resume_embedding,
+            resume_embedding_model=resume_embedding_model,
+            job_embeddings=job_embeddings,
+            embedding_model=embedding_model,
+        )
         if unique_jobs and not eligible:
             warnings.append(
                 f"No postings met the {self._match_service.min_score:g} minimum match score."
@@ -139,9 +183,29 @@ class SearchService:
                 f"{self._match_service.min_score:g} minimum match score."
             )
 
+        if self._rerank_service is not None and eligible:
+            await self._notify(progress, 88, 100, "Re-ranking top matches")
+            rerank_outcome = await self._rerank_service.rerank(profile, eligible)
+            warnings.extend(rerank_outcome.warnings)
+            await create_llm_calls(session, rerank_outcome.calls)
+            eligible = rerank_outcome.jobs
+
         ranked = eligible[: min(criteria.limit, self._max_results)]
-        await self._notify(progress, 90, 100, "Saving ranked matches")
-        stored = await upsert_jobs(session, [item.job for item in ranked])
+        await self._notify(progress, 92, 100, "Saving ranked matches")
+        jobs_to_store = [
+            item.job.model_copy(
+                update={
+                    "embedding": job_embeddings[item.job.dedupe_key],
+                    "embedding_model": embedding_model,
+                }
+            )
+            if job_embeddings is not None
+            and item.job.dedupe_key in job_embeddings
+            and embedding_model is not None
+            else item.job
+            for item in ranked
+        ]
+        stored = await upsert_jobs(session, jobs_to_store)
 
         search = await create_search(session, user.id, resume.id, criteria)
         match_rows: list[tuple[UUID, float, dict[str, Any], str, int]] = []

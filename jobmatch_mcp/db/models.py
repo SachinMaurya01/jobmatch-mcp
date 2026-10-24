@@ -51,11 +51,20 @@ class Resume(Base):
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(EMBEDDING_DIMENSIONS), nullable=True
     )
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (Index("ix_resumes_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_resumes_user_created", "user_id", "created_at"),
+        Index(
+            "ix_resumes_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
 
 class Job(Base):
@@ -77,6 +86,7 @@ class Job(Base):
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(EMBEDDING_DIMENSIONS), nullable=True
     )
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -84,6 +94,12 @@ class Job(Base):
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_jobs_source_external_id"),
         Index("ix_jobs_dedupe_key", "dedupe_key"),
+        Index(
+            "ix_jobs_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
 
@@ -122,3 +138,22 @@ class Match(Base):
         UniqueConstraint("search_id", "job_id", name="uq_matches_search_job"),
         Index("ix_matches_search_rank", "search_id", "rank"),
     )
+
+
+class LLMCall(Base):
+    __tablename__ = "llm_calls"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_estimate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_llm_calls_created_at", "created_at"),)

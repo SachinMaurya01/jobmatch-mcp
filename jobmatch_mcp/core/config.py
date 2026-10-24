@@ -10,11 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ScoringWeights(BaseModel):
-    """Initial structured-scoring weights for the hybrid pipeline.
-
-    Semantic similarity is part of the hybrid pipeline (Phase 3). It is kept
-    here so the configured weights remain stable when Phase 3 lands.
-    """
+    """Weights for the hybrid scoring pipeline."""
 
     skills: float = Field(default=0.40, ge=0.0)
     semantic: float = Field(default=0.25, ge=0.0)
@@ -76,6 +72,39 @@ class Settings(BaseSettings):
 
     scoring_weights: ScoringWeights = Field(default_factory=ScoringWeights)
 
+    enable_semantic: bool = True
+    embedding_model: str = "nomic-embed-text"
+    embedding_base_url: str = "http://localhost:11434"
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0.0)
+    embedding_max_jobs: int = Field(default=100, ge=1)
+
+    enable_llm_rerank: bool = True
+    rerank_top_n: int = Field(default=20, ge=0, le=30)
+    rerank_max_adjustment: float = Field(default=10.0, ge=0.0, le=10.0)
+    llm_max_consecutive_failures: int = Field(default=3, ge=1)
+    llm_circuit_cooldown_seconds: float = Field(default=60.0, gt=0.0)
+    llm_max_output_tokens: int = Field(default=1500, ge=1)
+    llm_recent_calls_limit: int = Field(default=20, ge=1, le=100)
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b"
+    ollama_timeout_seconds: float = Field(default=30.0, gt=0.0)
+    ollama_cost_per_million_tokens: float = Field(default=0.0, ge=0.0)
+
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: float = Field(default=30.0, gt=0.0)
+    openai_input_cost_per_million: float = Field(default=0.15, ge=0.0)
+    openai_output_cost_per_million: float = Field(default=0.60, ge=0.0)
+
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
+    anthropic_model: str = "claude-3-5-haiku-latest"
+    anthropic_timeout_seconds: float = Field(default=30.0, gt=0.0)
+    anthropic_input_cost_per_million: float = Field(default=0.80, ge=0.0)
+    anthropic_output_cost_per_million: float = Field(default=4.00, ge=0.0)
+
     disable_hosted_fallback: bool = True
 
     @model_validator(mode="after")
@@ -87,6 +116,18 @@ class Settings(BaseSettings):
     @property
     def jsearch_configured(self) -> bool:
         return bool(self.jsearch_api_key)
+
+    @property
+    def openai_configured(self) -> bool:
+        return bool(self.openai_api_key)
+
+    @property
+    def anthropic_configured(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+    @property
+    def hosted_fallback_enabled(self) -> bool:
+        return not self.disable_hosted_fallback
 
     @property
     def greenhouse_board_tokens(self) -> list[str]:

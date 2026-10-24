@@ -49,6 +49,8 @@ class RawJob(BaseModel):
     posted_at: datetime | None = None
     dedupe_key: str
     sources: list[str] = Field(default_factory=list)
+    embedding: list[float] | None = None
+    embedding_model: str | None = None
 
 
 class SearchCriteria(BaseModel):
@@ -72,6 +74,12 @@ class ScoreBreakdown(BaseModel):
     missing_skills: list[str] = Field(default_factory=list)
     weights_used: dict[str, float] = Field(default_factory=dict)
     total: float = Field(ge=0.0, le=100.0)
+    pre_rerank_total: float | None = Field(default=None, ge=0.0, le=100.0)
+    llm_adjustment: float | None = Field(default=None, ge=-10.0, le=10.0)
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    seniority_fit: str | None = None
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class RankedJob(BaseModel):
@@ -127,6 +135,7 @@ class ParseResumeOutput(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     resume_id: UUID
     profile: ResumeProfile
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SearchJobsOutput(BaseModel):
@@ -148,3 +157,72 @@ class JobDetailsOutput(BaseModel):
 class ListSourcesOutput(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     sources: list[SourceStatus] = Field(default_factory=list)
+
+
+class ExplainMatchOutput(BaseModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    job_id: UUID
+    search_id: UUID
+    score: float = Field(ge=0.0, le=100.0)
+    rank: int = Field(ge=1)
+    explanation: str
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    seniority_fit: str = ""
+    suggestions: list[str] = Field(default_factory=list)
+    breakdown: ScoreBreakdown
+    created_at: datetime
+
+
+class LLMCallRecord(BaseModel):
+    id: UUID | None = None
+    provider: str
+    model: str
+    latency_ms: float = Field(ge=0.0)
+    tokens_in: int = Field(ge=0)
+    tokens_out: int = Field(ge=0)
+    cost_estimate: float = Field(ge=0.0)
+    status: Literal["success", "error", "skipped"]
+    fallback_reason: str | None = None
+    created_at: datetime | None = None
+
+
+class ProviderStatus(BaseModel):
+    name: str
+    role: Literal["primary", "fallback"]
+    configured: bool
+    available: bool
+    circuit_state: Literal["closed", "open", "half_open"]
+    detail: str = ""
+    consecutive_failures: int = 0
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_error: str | None = None
+    last_latency_ms: float | None = None
+    recent_calls: int = 0
+    recent_cost_estimate: float = 0.0
+
+
+class ProviderStatusOutput(BaseModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    providers: list[ProviderStatus] = Field(default_factory=list)
+    recent_calls: list[LLMCallRecord] = Field(default_factory=list)
+    total_cost_estimate: float = Field(default=0.0, ge=0.0)
+
+
+class RerankDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0)
+    adjustment: float = Field(ge=-10.0, le=10.0)
+    explanation: str = Field(min_length=1, max_length=600)
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    seniority_fit: str = Field(default="", max_length=300)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class RerankResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[RerankDecision] = Field(default_factory=list)

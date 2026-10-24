@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 from jobmatch_mcp.core.config import ScoringWeights
+from jobmatch_mcp.matching.semantic import semantic_component
 from jobmatch_mcp.matching.seniority import (
     extract_required_years,
     infer_job_seniority,
@@ -119,13 +121,27 @@ def score_job(
     job: RawJob,
     criteria: SearchCriteria,
     weights: ScoringWeights,
+    *,
+    resume_embedding: Sequence[float] | None = None,
+    resume_embedding_model: str | None = None,
+    job_embedding: Sequence[float] | None = None,
+    job_embedding_model: str | None = None,
+    embedding_model: str | None = None,
 ) -> ScoredJob:
-    """Score one posting with the structured portion of the hybrid pipeline."""
+    """Score one posting with the hybrid pipeline."""
     job_skills = extract_skills(f"{job.title}\n{job.description}")
 
     skills_score, skills_detail, matched, missing = _skills_component(profile, job_skills)
+    semantic_score, semantic_detail = semantic_component(
+        resume_embedding,
+        job_embedding,
+        resume_model=resume_embedding_model,
+        job_model=job_embedding_model,
+        expected_model=embedding_model,
+    )
     raw_components: dict[str, tuple[float | None, str]] = {
         "skills": (skills_score, skills_detail),
+        "semantic": (semantic_score, semantic_detail),
         "experience": _experience_component(profile, job),
         "seniority": _seniority_component(profile, job),
         "location": _location_component(job, criteria),
@@ -134,6 +150,7 @@ def score_job(
 
     configured: dict[str, float] = {
         "skills": weights.skills,
+        "semantic": weights.semantic,
         "experience": weights.experience,
         "seniority": weights.seniority,
         "location": weights.location,
@@ -192,18 +209,43 @@ def rank_jobs(
     criteria: SearchCriteria,
     weights: ScoringWeights,
     min_score: float = 60.0,
+    *,
+    resume_embedding: Sequence[float] | None = None,
+    resume_embedding_model: str | None = None,
+    job_embeddings: Mapping[str, Sequence[float]] | None = None,
+    embedding_model: str | None = None,
 ) -> list[ScoredJob]:
-    scored = [
-        item
-        for item in (score_job(profile, job, criteria, weights) for job in jobs)
-        if item.score >= min_score
-    ]
-    scored.sort(
-        key=lambda item: (
-            -item.score,
-            -_posted_sort_value(item.job.posted_at),
-            item.job.title.lower(),
-            item.job.company.lower(),
+    scored: list[ScoredJob] = []
+    for job in jobs:
+        from_service = job_embeddings is not None and job.dedupe_key in job_embeddings
+        job_embedding = (
+            job_embeddings[job.dedupe_key]
+            if from_service and job_embeddings is not None
+            else job.embedding
         )
-    )
+        job_embedding_model = embedding_model if from_service else job.embedding_model
+        item = score_job(
+            profile,
+            job,
+            criteria,
+            weights,
+            resume_embedding=resume_embedding,
+            resume_embedding_model=resume_embedding_model,
+            job_embedding=job_embedding,
+            job_embedding_model=job_embedding_model,
+            embedding_model=embedding_model,
+        )
+        if item.score >= min_score:
+            scored.append(item)
+
+    scored.sort(key=scored_sort_key)
     return scored
+
+
+def scored_sort_key(item: ScoredJob) -> tuple[float, float, str, str]:
+    return (
+        -item.score,
+        -_posted_sort_value(item.job.posted_at),
+        item.job.title.lower(),
+        item.job.company.lower(),
+    )

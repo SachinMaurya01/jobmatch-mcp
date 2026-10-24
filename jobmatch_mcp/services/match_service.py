@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from jobmatch_mcp.core.config import ScoringWeights
 from jobmatch_mcp.matching.structured import ScoredJob, rank_jobs
 from jobmatch_mcp.schemas import RawJob, ResumeProfile, SearchCriteria
@@ -21,5 +23,20 @@ class MatchService:
         profile: ResumeProfile,
         jobs: list[RawJob],
         criteria: SearchCriteria,
+        *,
+        resume_embedding: Sequence[float] | None = None,
+        resume_embedding_model: str | None = None,
+        job_embeddings: Mapping[str, Sequence[float]] | None = None,
+        embedding_model: str | None = None,
     ) -> list[ScoredJob]:
-        return rank_jobs(profile, jobs, criteria, self._weights, self._min_score)
+        return rank_jobs(
+            profile,
+            jobs,
+            criteria,
+            self._weights,
+            self._min_score,
+            resume_embedding=resume_embedding,
+            resume_embedding_model=resume_embedding_model,
+            job_embeddings=job_embeddings,
+            embedding_model=embedding_model,
+        )
