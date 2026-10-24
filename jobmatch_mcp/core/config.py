@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ScoringWeights(BaseModel):
-    """Initial structured-scoring weights from PRD section 4.2.
+    """Initial structured-scoring weights for the hybrid pipeline.
 
     Semantic similarity is part of the hybrid pipeline (Phase 3). It is kept
     here so the configured weights remain stable when Phase 3 lands.
@@ -48,12 +48,31 @@ class Settings(BaseSettings):
     jsearch_base_url: str = "https://jsearch.p.rapidapi.com"
     jsearch_country: str = "in"
 
+    greenhouse_boards: str = ""
+    greenhouse_base_url: str = "https://boards-api.greenhouse.io/v1"
+
+    lever_companies: str = ""
+    lever_base_url: str = "https://api.lever.co/v0"
+
+    serpapi_api_key: str | None = None
+    serpapi_base_url: str = "https://serpapi.com"
+    serpapi_country: str = "in"
+
     http_timeout_seconds: float = Field(default=10.0, gt=0.0)
+    source_timeout_seconds: float = Field(default=20.0, gt=0.0)
     search_default_limit: int = Field(default=30, ge=1, le=30)
     search_max_limit: int = Field(default=30, ge=1, le=30)
     min_match_score: float = Field(default=60.0, ge=60.0, le=100.0)
     max_resume_bytes: int = Field(default=5_000_000, ge=1)
     max_job_description_chars: int = Field(default=5_000, ge=100)
+
+    connector_cache_ttl_seconds: float = Field(default=300.0, ge=0.0)
+    connector_cache_max_entries: int = Field(default=256, ge=1)
+
+    jsearch_rate_limit_per_minute: int = Field(default=30, ge=1)
+    greenhouse_rate_limit_per_minute: int = Field(default=60, ge=1)
+    lever_rate_limit_per_minute: int = Field(default=60, ge=1)
+    serpapi_rate_limit_per_minute: int = Field(default=30, ge=1)
 
     scoring_weights: ScoringWeights = Field(default_factory=ScoringWeights)
 
@@ -68,6 +87,30 @@ class Settings(BaseSettings):
     @property
     def jsearch_configured(self) -> bool:
         return bool(self.jsearch_api_key)
+
+    @property
+    def greenhouse_board_tokens(self) -> list[str]:
+        return _split_csv(self.greenhouse_boards)
+
+    @property
+    def lever_company_tokens(self) -> list[str]:
+        return _split_csv(self.lever_companies)
+
+    @property
+    def greenhouse_configured(self) -> bool:
+        return bool(self.greenhouse_board_tokens)
+
+    @property
+    def lever_configured(self) -> bool:
+        return bool(self.lever_company_tokens)
+
+    @property
+    def serpapi_configured(self) -> bool:
+        return bool(self.serpapi_api_key)
+
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)

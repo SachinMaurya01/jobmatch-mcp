@@ -1,4 +1,4 @@
-"""SQLAlchemy models matching PRD section 6."""
+"""SQLAlchemy models for users, resumes, jobs, searches, and matches."""
 
 from __future__ import annotations
 

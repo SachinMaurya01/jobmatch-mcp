@@ -1,4 +1,4 @@
-"""PII redaction helpers used by logs and error messages (PRD section 8.1)."""
+"""PII redaction helpers used by logs and error messages."""
 
 from __future__ import annotations
 

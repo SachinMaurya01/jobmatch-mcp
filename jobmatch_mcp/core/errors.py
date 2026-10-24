@@ -21,3 +21,10 @@ class NotFoundError(JobMatchError):
 
 class InvalidInputError(JobMatchError):
     """Raised when user-supplied input fails validation."""
+
+
+def describe_error(exc: BaseException) -> str:
+    """Return a secret-safe description for logs and tool output."""
+    if isinstance(exc, JobMatchError):
+        return str(exc)
+    return type(exc).__name__

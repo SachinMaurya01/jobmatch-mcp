@@ -1,69 +1,32 @@
-"""JSearch connector using the RapidAPI-hosted API (PRD section 7)."""
+"""JSearch connector using the RapidAPI-hosted API."""
 
 from __future__ import annotations
 
-import html
-import re
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from jobmatch_mcp.connectors.base import ConnectorHealth, JobConnector
+from jobmatch_mcp.connectors.common import (
+    annual_salary,
+    clean_text,
+    detect_remote,
+    parse_epoch,
+    parse_iso_datetime,
+)
 from jobmatch_mcp.core.config import Settings
 from jobmatch_mcp.core.errors import ConfigurationError, ConnectorError
 from jobmatch_mcp.matching.dedupe import normalize_dedupe_key
 from jobmatch_mcp.schemas import RawJob, SearchCriteria
 
-_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-_REMOTE_RE = re.compile(r"\b(remote|work from home|wfh|anywhere)\b", re.IGNORECASE)
-
-_PERIOD_MULTIPLIERS: dict[str, float] = {
-    "HOUR": 2080.0,
-    "DAY": 260.0,
-    "WEEK": 52.0,
-    "MONTH": 12.0,
-    "YEAR": 1.0,
-}
-
-
-def _clean_text(value: str) -> str:
-    return _WHITESPACE_RE.sub(" ", html.unescape(_TAG_RE.sub(" ", value))).strip()
-
-
-def _parse_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _parse_timestamp(value: Any) -> datetime | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-        try:
-            return datetime.fromtimestamp(value, tz=UTC)
-        except (OverflowError, OSError, ValueError):
-            return None
-    return None
-
-
-def _parse_salary(value: Any, period: Any) -> float | None:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
-        return None
-    multiplier = _PERIOD_MULTIPLIERS.get(str(period or "YEAR").upper(), 1.0)
-    return float(value) * multiplier
-
 
 def _build_location(item: dict[str, Any]) -> str | None:
     explicit = item.get("job_location")
     if isinstance(explicit, str) and explicit.strip():
-        return _clean_text(explicit)
+        return clean_text(explicit)
 
     parts = [
-        _clean_text(str(item.get(key)))
+        clean_text(str(item.get(key)))
         for key in ("job_city", "job_state", "job_country")
         if isinstance(item.get(key), str) and str(item.get(key)).strip()
     ]
@@ -192,25 +155,25 @@ class JSearchConnector(JobConnector):
             return None
 
         external_id = item.get("job_id")
-        title = _clean_text(str(item.get("job_title") or ""))
+        title = clean_text(str(item.get("job_title") or ""))
         url = item.get("job_apply_link") or item.get("job_google_link")
         if not external_id or not title or not isinstance(url, str) or not url.strip():
             return None
 
-        company = _clean_text(str(item.get("employer_name") or "")) or "Unknown"
+        company = clean_text(str(item.get("employer_name") or "")) or "Unknown"
         location = _build_location(item)
-        description = _clean_text(str(item.get("job_description") or ""))
+        description = clean_text(str(item.get("job_description") or ""))
         description = description[: self._settings.max_job_description_chars]
 
         remote_value = item.get("job_is_remote")
         remote = (
             bool(remote_value)
             if isinstance(remote_value, bool)
-            else bool(_REMOTE_RE.search(f"{title} {location or ''} {description}"))
+            else detect_remote(title, location, description)
         )
 
         period = item.get("job_salary_period")
-        posted_at = _parse_datetime(item.get("job_posted_at_datetime_utc")) or _parse_timestamp(
+        posted_at = parse_iso_datetime(item.get("job_posted_at_datetime_utc")) or parse_epoch(
             item.get("job_posted_at_timestamp")
         )
 
@@ -221,10 +184,11 @@ class JSearchConnector(JobConnector):
             company=company,
             location=location,
             remote=remote,
-            salary_min=_parse_salary(item.get("job_min_salary"), period),
-            salary_max=_parse_salary(item.get("job_max_salary"), period),
+            salary_min=annual_salary(item.get("job_min_salary"), period),
+            salary_max=annual_salary(item.get("job_max_salary"), period),
             description=description,
             url=url.strip(),
             posted_at=posted_at,
             dedupe_key=normalize_dedupe_key(title, company, location),
+            sources=[self.name],
         )

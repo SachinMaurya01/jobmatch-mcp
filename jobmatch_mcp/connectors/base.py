@@ -1,4 +1,4 @@
-"""Connector interface from PRD section 5.2."""
+"""Connector interface for job sources."""
 
 from __future__ import annotations
 

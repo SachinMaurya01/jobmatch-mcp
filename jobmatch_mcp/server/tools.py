@@ -1,8 +1,10 @@
-"""Phase 1 MCP tools: parse_resume, search_jobs, get_job_details."""
+"""MCP tools: resume parsing, multi-source search, job details, and source health."""
 
 from __future__ import annotations
 
 from uuid import UUID
+
+from fastmcp import Context
 
 from jobmatch_mcp.core.config import get_settings
 from jobmatch_mcp.core.errors import InvalidInputError, NotFoundError
@@ -11,6 +13,7 @@ from jobmatch_mcp.db.repositories import get_job, to_job_record
 from jobmatch_mcp.db.session import session_scope
 from jobmatch_mcp.schemas import (
     JobDetailsOutput,
+    ListSourcesOutput,
     ParseResumeOutput,
     SearchCriteria,
     SearchJobsOutput,
@@ -18,7 +21,7 @@ from jobmatch_mcp.schemas import (
 from jobmatch_mcp.server.deps import get_registry
 from jobmatch_mcp.services.match_service import MatchService
 from jobmatch_mcp.services.resume_service import ResumeService
-from jobmatch_mcp.services.search_service import SearchService
+from jobmatch_mcp.services.search_service import ProgressCallback, SearchService
 
 logger = get_logger(__name__)
 
@@ -62,13 +65,16 @@ async def search_jobs(
     min_salary: float | None = None,
     sources: list[str] | None = None,
     limit: int | None = None,
+    ctx: Context | None = None,
 ) -> SearchJobsOutput:
     """Search enabled job sources, score each posting against the latest resume,
     and return a ranked list with a score (0-100) and score breakdown.
 
     Load a resume with `parse_resume` first. Jobs scoring below the configured
     minimum (default 60) are excluded, and at most 30 jobs are returned. If
-    `limit` exceeds the configured maximum it is clamped.
+    `limit` exceeds the configured maximum it is clamped. Duplicate postings
+    across sources are merged, and a failing source does not fail the search.
+    Progress notifications are sent when the client supports them.
     """
     settings = get_settings()
     effective_limit = limit if limit is not None else settings.search_default_limit
@@ -105,8 +111,16 @@ async def search_jobs(
             match_service=MatchService(settings.scoring_weights, settings.min_match_score),
             max_results=settings.search_max_limit,
         )
+        progress: ProgressCallback | None = None
+        if ctx is not None:
+
+            async def report(current: float, total: float, message: str) -> None:
+                await ctx.report_progress(current, total, message)
+
+            progress = report
+
         async with session_scope() as session:
-            result = await service.search(session, criteria, sources)
+            result = await service.search(session, criteria, sources, progress)
         logger.info(
             "tool.search_jobs.done",
             extra={
@@ -120,6 +134,26 @@ async def search_jobs(
             },
         )
         return result
+
+
+async def list_sources() -> ListSourcesOutput:
+    """List enabled job sources with health, last success, and rate-limit state."""
+    with request_context() as request_id:
+        logger.info(
+            "tool.list_sources.start",
+            extra={"fields": {"request_id": request_id}},
+        )
+        statuses = await get_registry().statuses()
+        logger.info(
+            "tool.list_sources.done",
+            extra={
+                "fields": {
+                    "count": len(statuses),
+                    "request_id": request_id,
+                }
+            },
+        )
+        return ListSourcesOutput(sources=statuses)
 
 
 async def get_job_details(job_id: UUID) -> JobDetailsOutput:

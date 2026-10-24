@@ -48,6 +48,7 @@ class RawJob(BaseModel):
     url: str
     posted_at: datetime | None = None
     dedupe_key: str
+    sources: list[str] = Field(default_factory=list)
 
 
 class SearchCriteria(BaseModel):
@@ -84,6 +85,7 @@ class RankedJob(BaseModel):
     salary_min: float | None = None
     salary_max: float | None = None
     source: str
+    sources: list[str] = Field(default_factory=list)
     url: str
     explanation: str
     breakdown: ScoreBreakdown
@@ -106,6 +108,21 @@ class JobRecord(BaseModel):
     dedupe_key: str
 
 
+class SourceStatus(BaseModel):
+    name: str
+    enabled: bool = True
+    status: Literal["ok", "degraded", "unavailable"] = "ok"
+    detail: str = ""
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_error: str | None = None
+    rate_limit_per_minute: int | None = None
+    rate_limit_remaining: int | None = None
+    cache_ttl_seconds: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+
+
 class ParseResumeOutput(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     resume_id: UUID
@@ -118,6 +135,7 @@ class SearchJobsOutput(BaseModel):
     resume_id: UUID
     count: int
     sources_used: list[str] = Field(default_factory=list)
+    source_statuses: list[SourceStatus] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     results: list[RankedJob] = Field(default_factory=list)
 
@@ -125,3 +143,8 @@ class SearchJobsOutput(BaseModel):
 class JobDetailsOutput(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     job: JobRecord
+
+
+class ListSourcesOutput(BaseModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    sources: list[SourceStatus] = Field(default_factory=list)

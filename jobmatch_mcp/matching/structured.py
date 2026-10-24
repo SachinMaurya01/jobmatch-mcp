@@ -1,4 +1,4 @@
-"""Structured (non-semantic) scoring and deterministic ranking (PRD 4.2)."""
+"""Structured (non-semantic) scoring and deterministic ranking."""
 
 from __future__ import annotations
 

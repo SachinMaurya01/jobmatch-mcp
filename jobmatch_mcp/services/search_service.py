@@ -1,19 +1,21 @@
-"""Search orchestration: fan out, upsert, score, rank, persist."""
+"""Search orchestration: fan out, dedupe, score, rank, persist."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jobmatch_mcp.connectors.controls import ConnectorRuntime
 from jobmatch_mcp.connectors.registry import ConnectorRegistry
 from jobmatch_mcp.core.errors import (
     ConfigurationError,
     ConnectorError,
     InvalidInputError,
-    JobMatchError,
+    describe_error,
 )
 from jobmatch_mcp.core.logging import get_logger
 from jobmatch_mcp.db.repositories import (
@@ -23,6 +25,7 @@ from jobmatch_mcp.db.repositories import (
     get_or_create_default_user,
     upsert_jobs,
 )
+from jobmatch_mcp.matching.dedupe import dedupe_jobs
 from jobmatch_mcp.schemas import (
     RankedJob,
     RawJob,
@@ -33,6 +36,8 @@ from jobmatch_mcp.schemas import (
 from jobmatch_mcp.services.match_service import MatchService
 
 logger = get_logger(__name__)
+
+ProgressCallback = Callable[[float, float, str], Awaitable[None]]
 
 
 class SearchService:
@@ -51,49 +56,78 @@ class SearchService:
         session: AsyncSession,
         criteria: SearchCriteria,
         sources: list[str] | None = None,
+        progress: ProgressCallback | None = None,
     ) -> SearchJobsOutput:
+        await self._notify(progress, 0, 100, "Loading resume")
         user = await get_or_create_default_user(session)
         resume = await get_latest_resume(session, user.id)
         if resume is None:
             raise InvalidInputError("No resume loaded. Call parse_resume first.")
         profile = ResumeProfile.model_validate(resume.parsed_profile)
 
-        connectors = self._registry.select(sources)
-        if not connectors:
+        runtimes = self._registry.select(sources)
+        if not runtimes:
             raise ConfigurationError(
-                "No job sources are enabled. Set JOBMATCH_JSEARCH_API_KEY to enable "
-                "the JSearch connector."
+                "No job sources are enabled. Configure at least one of JSearch, "
+                "Greenhouse, Lever, or SerpAPI."
             )
 
+        await self._notify(
+            progress,
+            5,
+            100,
+            f"Searching {len(runtimes)} source(s)",
+        )
+        completed = 0
+        progress_lock = asyncio.Lock()
+
+        async def run_source(runtime: ConnectorRuntime) -> list[RawJob]:
+            nonlocal completed
+            try:
+                return await runtime.search(criteria)
+            finally:
+                async with progress_lock:
+                    completed += 1
+                    await self._notify(
+                        progress,
+                        5 + (completed / len(runtimes)) * 55,
+                        100,
+                        f"{runtime.name} finished",
+                    )
+
         results = await asyncio.gather(
-            *(connector.search(criteria) for connector in connectors),
+            *(run_source(runtime) for runtime in runtimes),
             return_exceptions=True,
         )
 
         jobs: list[RawJob] = []
         warnings: list[str] = []
         sources_used: list[str] = []
-        for connector, result in zip(connectors, results, strict=True):
+        for runtime, result in zip(runtimes, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             if isinstance(result, BaseException):
-                detail = str(result) if isinstance(result, JobMatchError) else type(result).__name__
-                warnings.append(f"{connector.name} failed: {detail}")
+                detail = describe_error(result)
+                warnings.append(f"{runtime.name} failed: {detail}")
                 logger.warning(
                     "connector.failed",
-                    extra={"fields": {"source": connector.name, "error": detail}},
+                    extra={"fields": {"source": runtime.name, "error": detail}},
                 )
                 continue
-            sources_used.append(connector.name)
+            sources_used.append(runtime.name)
             jobs.extend(result)
 
         if not sources_used:
             raise ConnectorError("All job sources failed. " + " ".join(warnings))
 
-        unique_jobs = self._dedupe_raw(jobs)
+        await self._notify(progress, 70, 100, "Deduplicating results")
+        unique_jobs = dedupe_jobs(jobs)
         warnings.extend(self._filter_warnings(criteria, unique_jobs))
 
         if not unique_jobs:
             warnings.append("No postings were returned for these criteria.")
 
+        await self._notify(progress, 80, 100, "Scoring and ranking matches")
         eligible = self._match_service.rank(profile, unique_jobs, criteria)
         if unique_jobs and not eligible:
             warnings.append(
@@ -106,6 +140,7 @@ class SearchService:
             )
 
         ranked = eligible[: min(criteria.limit, self._max_results)]
+        await self._notify(progress, 90, 100, "Saving ranked matches")
         stored = await upsert_jobs(session, [item.job for item in ranked])
 
         search = await create_search(session, user.id, resume.id, criteria)
@@ -128,6 +163,7 @@ class SearchService:
                     salary_min=scored.job.salary_min,
                     salary_max=scored.job.salary_max,
                     source=scored.job.source,
+                    sources=scored.job.sources,
                     url=scored.job.url,
                     explanation=scored.explanation,
                     breakdown=scored.breakdown,
@@ -135,27 +171,34 @@ class SearchService:
             )
 
         await create_matches(session, search.id, match_rows)
+        await self._notify(progress, 100, 100, "Search complete")
 
         return SearchJobsOutput(
             search_id=search.id,
             resume_id=resume.id,
             count=len(output_rows),
             sources_used=sources_used,
+            source_statuses=await self._registry.statuses(),
             warnings=warnings,
             results=output_rows,
         )
 
     @staticmethod
-    def _dedupe_raw(jobs: list[RawJob]) -> list[RawJob]:
-        seen: set[tuple[str, str]] = set()
-        unique: list[RawJob] = []
-        for job in jobs:
-            key = (job.source, job.external_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(job)
-        return unique
+    async def _notify(
+        progress: ProgressCallback | None,
+        current: float,
+        total: float,
+        message: str,
+    ) -> None:
+        if progress is None:
+            return
+        try:
+            await progress(current, total, message)
+        except Exception as exc:
+            logger.warning(
+                "search.progress_failed",
+                extra={"fields": {"error": type(exc).__name__}},
+            )
 
     @staticmethod
     def _filter_warnings(criteria: SearchCriteria, jobs: list[RawJob]) -> list[str]:
