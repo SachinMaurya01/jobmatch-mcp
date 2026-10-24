@@ -14,6 +14,7 @@ from sqlalchemy import text
 from jobmatch_mcp.connectors.base import ConnectorHealth, JobConnector
 from jobmatch_mcp.connectors.registry import ConnectorRegistry
 from jobmatch_mcp.core.config import get_settings
+from jobmatch_mcp.core.errors import ConnectorError
 from jobmatch_mcp.db.session import dispose_engine, get_session_factory
 from jobmatch_mcp.matching.dedupe import normalize_dedupe_key
 from jobmatch_mcp.schemas import RawJob, SearchCriteria
@@ -92,6 +93,43 @@ class FakeConnector(JobConnector):
         return ConnectorHealth(name=self.name, ok=True, detail="test connector")
 
 
+class DuplicateConnector(JobConnector):
+    name = "duplicate"
+
+    async def search(self, criteria: SearchCriteria) -> list[RawJob]:
+        return [
+            RawJob(
+                source=self.name,
+                external_id="duplicate-1",
+                title="Senior Python Engineer",
+                company="Acme",
+                location="Bengaluru, India",
+                remote=True,
+                salary_min=130_000,
+                salary_max=160_000,
+                description="Python, FastAPI, Docker.",
+                url="https://example.com/jobs/duplicate-1",
+                posted_at=None,
+                dedupe_key=normalize_dedupe_key(
+                    "Senior Python Engineer", "Acme", "Bengaluru, India"
+                ),
+            )
+        ]
+
+    async def health(self) -> ConnectorHealth:
+        return ConnectorHealth(name=self.name, ok=True, detail="test connector")
+
+
+class FailingConnector(JobConnector):
+    name = "broken"
+
+    async def search(self, criteria: SearchCriteria) -> list[RawJob]:
+        raise ConnectorError("simulated source outage")
+
+    async def health(self) -> ConnectorHealth:
+        return ConnectorHealth(name=self.name, ok=True, detail="configured")
+
+
 async def test_parse_search_and_details(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
     assert database_url
     async with get_session_factory()() as session:
@@ -120,3 +158,33 @@ async def test_parse_search_and_details(database_url: str, monkeypatch: pytest.M
     details = await tools.get_job_details(search.results[0].job_id)
     assert details.job.title == "Senior Python Engineer"
     assert details.job.source == "fake"
+
+
+async def test_cross_source_dedupe_and_partial_results(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert database_url
+    async with get_session_factory()() as session:
+        await session.execute(text("TRUNCATE matches, searches, jobs, resumes, users CASCADE"))
+        await session.commit()
+
+    registry = ConnectorRegistry(
+        [FakeConnector(), DuplicateConnector(), FailingConnector()],
+        cache_ttl_seconds=0,
+    )
+    monkeypatch.setattr(tools, "get_registry", lambda: registry)
+
+    await tools.parse_resume(text=RESUME_TEXT)
+    search = await tools.search_jobs(query="python", locations=["Bengaluru"], limit=5)
+
+    assert search.count == 1
+    assert search.results[0].title == "Senior Python Engineer"
+    assert set(search.results[0].sources) == {"fake", "duplicate"}
+    assert set(search.sources_used) == {"fake", "duplicate"}
+    assert any("broken failed" in warning for warning in search.warnings)
+
+    statuses = {status.name: status for status in search.source_statuses}
+    assert statuses["broken"].status == "degraded"
+
+    listed = await tools.list_sources()
+    assert {status.name for status in listed.sources} == {"fake", "duplicate", "broken"}
