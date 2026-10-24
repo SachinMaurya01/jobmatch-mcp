@@ -45,6 +45,6 @@ pgdata/
 .DS_Store
 Thumbs.db
 
-# Internal project documents
-PRD.md
-AGENTS.md
+# # Internal project documents
+# PRD.md
+# AGENTS.md
