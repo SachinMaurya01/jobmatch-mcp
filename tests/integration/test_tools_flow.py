@@ -1,4 +1,4 @@
-"""End-to-end Phase 1 tool flow against PostgreSQL."""
+"""End-to-end tool flow against PostgreSQL."""
 
 from __future__ import annotations
 
@@ -40,6 +40,8 @@ def database_url() -> Iterator[str]:
     os.environ["JOBMATCH_SEARCH_DEFAULT_LIMIT"] = "30"
     os.environ["JOBMATCH_SEARCH_MAX_LIMIT"] = "30"
     os.environ["JOBMATCH_MIN_MATCH_SCORE"] = "60"
+    os.environ["JOBMATCH_ENABLE_SEMANTIC"] = "false"
+    os.environ["JOBMATCH_ENABLE_LLM_RERANK"] = "false"
     get_settings.cache_clear()
 
     config = Config("alembic.ini")
@@ -133,7 +135,9 @@ class FailingConnector(JobConnector):
 async def test_parse_search_and_details(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
     assert database_url
     async with get_session_factory()() as session:
-        await session.execute(text("TRUNCATE matches, searches, jobs, resumes, users CASCADE"))
+        await session.execute(
+            text("TRUNCATE llm_calls, matches, searches, jobs, resumes, users CASCADE")
+        )
         await session.commit()
 
     registry = ConnectorRegistry([FakeConnector()])
@@ -165,7 +169,9 @@ async def test_cross_source_dedupe_and_partial_results(
 ) -> None:
     assert database_url
     async with get_session_factory()() as session:
-        await session.execute(text("TRUNCATE matches, searches, jobs, resumes, users CASCADE"))
+        await session.execute(
+            text("TRUNCATE llm_calls, matches, searches, jobs, resumes, users CASCADE")
+        )
         await session.commit()
 
     registry = ConnectorRegistry(

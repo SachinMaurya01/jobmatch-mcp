@@ -7,7 +7,14 @@ from jobmatch_mcp.server.app import mcp
 
 async def test_registers_expected_tools() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
-    assert set(tools) == {"parse_resume", "search_jobs", "get_job_details", "list_sources"}
+    assert set(tools) == {
+        "parse_resume",
+        "search_jobs",
+        "get_job_details",
+        "list_sources",
+        "explain_match",
+        "get_provider_status",
+    }
 
 
 async def test_tools_have_input_schemas() -> None:

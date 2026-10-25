@@ -1,4 +1,4 @@
-"""Initial schema for Phase 1.
+"""Initial schema.
 
 Revision ID: 0001_initial
 Revises:

@@ -14,18 +14,28 @@ from sqlalchemy import text
 
 from jobmatch_mcp.core.config import get_settings
 from jobmatch_mcp.db.repositories import (
+    create_llm_calls,
     create_matches,
     create_resume,
     create_search,
     get_job,
     get_latest_resume,
     get_or_create_default_user,
+    get_recent_llm_calls,
     to_job_record,
+    to_llm_call_record,
+    update_resume_embedding,
     upsert_jobs,
 )
 from jobmatch_mcp.db.session import dispose_engine, get_session_factory
 from jobmatch_mcp.matching.dedupe import normalize_dedupe_key
-from jobmatch_mcp.schemas import RawJob, ResumeProfile, SearchCriteria, Seniority
+from jobmatch_mcp.schemas import (
+    LLMCallRecord,
+    RawJob,
+    ResumeProfile,
+    SearchCriteria,
+    Seniority,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -55,7 +65,9 @@ def database_url() -> Iterator[str]:
 async def test_resume_job_search_roundtrip(database_url: str) -> None:
     assert database_url
     async with get_session_factory()() as session:
-        await session.execute(text("TRUNCATE matches, searches, jobs, resumes, users CASCADE"))
+        await session.execute(
+            text("TRUNCATE llm_calls, matches, searches, jobs, resumes, users CASCADE")
+        )
 
         user = await get_or_create_default_user(session)
         profile = ResumeProfile(
@@ -110,3 +122,49 @@ async def test_resume_job_search_roundtrip(database_url: str) -> None:
 
         count = await session.scalar(text("SELECT count(*) FROM matches"))
         assert count == 1
+
+
+async def test_embeddings_and_llm_calls_roundtrip(database_url: str) -> None:
+    assert database_url
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("TRUNCATE llm_calls, matches, searches, jobs, resumes, users CASCADE")
+        )
+
+        user = await get_or_create_default_user(session)
+        profile = ResumeProfile(skills=["Python"], years_experience=5)
+        resume = await create_resume(
+            session,
+            user.id,
+            "Python",
+            profile,
+            embedding=[0.1] * 768,
+            embedding_model="nomic-embed-text",
+        )
+        assert resume.embedding_model == "nomic-embed-text"
+        assert resume.embedding is not None
+
+        await update_resume_embedding(session, resume.id, [0.2] * 768, "nomic-embed-text-v2")
+        assert resume.embedding_model == "nomic-embed-text-v2"
+
+        await create_llm_calls(
+            session,
+            [
+                LLMCallRecord(
+                    provider="ollama",
+                    model="qwen",
+                    latency_ms=120.0,
+                    tokens_in=100,
+                    tokens_out=50,
+                    cost_estimate=0.0,
+                    status="success",
+                )
+            ],
+        )
+        await session.commit()
+
+        recent = await get_recent_llm_calls(session, 5)
+        assert len(recent) == 1
+        record = to_llm_call_record(recent[0])
+        assert record.provider == "ollama"
+        assert record.tokens_in == 100
