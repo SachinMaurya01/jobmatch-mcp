@@ -76,9 +76,7 @@ class EmbeddingService:
             )
             return EmbeddingOutcome(
                 model=self.model,
-                warnings=[
-                    f"Posting embeddings unavailable ({detail}); using structured scoring."
-                ],
+                warnings=[f"Posting embeddings unavailable ({detail}); using structured scoring."],
             )
         if len(vectors) != len(selected):
             return EmbeddingOutcome(

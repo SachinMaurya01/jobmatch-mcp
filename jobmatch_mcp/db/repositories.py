@@ -211,9 +211,7 @@ async def create_llm_calls(session: AsyncSession, calls: Sequence[LLMCallRecord]
 async def get_recent_llm_calls(session: AsyncSession, limit: int = 20) -> list[LLMCall]:
     return list(
         (
-            await session.scalars(
-                select(LLMCall).order_by(LLMCall.created_at.desc()).limit(limit)
-            )
+            await session.scalars(select(LLMCall).order_by(LLMCall.created_at.desc()).limit(limit))
         ).all()
     )
 

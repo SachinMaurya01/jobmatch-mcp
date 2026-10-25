@@ -1,4 +1,4 @@
-"""MCP tools: resume parsing, multi-source search, job details, and source health."""
+"""MCP tools: resume parsing, hybrid search, explanations, and provider health."""
 
 from __future__ import annotations
 
@@ -9,16 +9,32 @@ from fastmcp import Context
 from jobmatch_mcp.core.config import get_settings
 from jobmatch_mcp.core.errors import InvalidInputError, NotFoundError
 from jobmatch_mcp.core.logging import get_logger, request_context
-from jobmatch_mcp.db.repositories import get_job, to_job_record
+from jobmatch_mcp.db.repositories import (
+    get_job,
+    get_latest_match_for_job,
+    get_or_create_default_user,
+    get_recent_llm_calls,
+    to_job_record,
+    to_llm_call_record,
+)
 from jobmatch_mcp.db.session import session_scope
 from jobmatch_mcp.schemas import (
+    ExplainMatchOutput,
     JobDetailsOutput,
     ListSourcesOutput,
     ParseResumeOutput,
+    ProviderStatus,
+    ProviderStatusOutput,
+    ScoreBreakdown,
     SearchCriteria,
     SearchJobsOutput,
 )
-from jobmatch_mcp.server.deps import get_registry
+from jobmatch_mcp.server.deps import (
+    get_embedding_service,
+    get_llm_router,
+    get_registry,
+    get_rerank_service,
+)
 from jobmatch_mcp.services.match_service import MatchService
 from jobmatch_mcp.services.resume_service import ResumeService
 from jobmatch_mcp.services.search_service import ProgressCallback, SearchService
@@ -42,9 +58,12 @@ async def parse_resume(
             extra={"fields": {"has_path": path is not None, "text_chars": len(text or "")}},
         )
         async with session_scope() as session:
-            service = ResumeService(settings.max_resume_bytes)
-            resume, profile = await service.parse_and_store(session, path=path, text=text)
-            result = ParseResumeOutput(resume_id=resume.id, profile=profile)
+            service = ResumeService(
+                settings.max_resume_bytes,
+                embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+            )
+            resume, profile, warnings = await service.parse_and_store(session, path=path, text=text)
+            result = ParseResumeOutput(resume_id=resume.id, profile=profile, warnings=warnings)
         logger.info(
             "tool.parse_resume.done",
             extra={
@@ -110,6 +129,8 @@ async def search_jobs(
             registry=get_registry(),
             match_service=MatchService(settings.scoring_weights, settings.min_match_score),
             max_results=settings.search_max_limit,
+            embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+            rerank_service=(get_rerank_service() if settings.enable_llm_rerank else None),
         )
         progress: ProgressCallback | None = None
         if ctx is not None:
@@ -173,3 +194,110 @@ async def get_job_details(job_id: UUID) -> JobDetailsOutput:
             extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
         )
         return result
+
+
+async def explain_match(job_id: UUID) -> ExplainMatchOutput:
+    """Explain the most recent stored match for one job.
+
+    Returns matched and missing skills, seniority fit, suggestions, and the full
+    score breakdown. Run `search_jobs` first so a match exists.
+    """
+    with request_context() as request_id:
+        logger.info(
+            "tool.explain_match.start",
+            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
+        )
+        async with session_scope() as session:
+            job = await get_job(session, job_id)
+            if job is None:
+                raise NotFoundError(f"No job found with id {job_id}")
+            user = await get_or_create_default_user(session)
+            latest = await get_latest_match_for_job(session, user.id, job_id)
+            if latest is None:
+                raise NotFoundError(f"No stored match for job {job_id}. Run search_jobs first.")
+            match, search = latest
+            breakdown = ScoreBreakdown.model_validate(match.breakdown)
+            result = ExplainMatchOutput(
+                job_id=job.id,
+                search_id=search.id,
+                score=match.score,
+                rank=match.rank,
+                explanation=match.explanation,
+                matched_skills=breakdown.matched_skills,
+                missing_skills=breakdown.missing_skills,
+                seniority_fit=breakdown.seniority_fit or _seniority_fit(breakdown),
+                suggestions=breakdown.suggestions or _suggestions(breakdown),
+                breakdown=breakdown,
+                created_at=search.created_at,
+            )
+        logger.info(
+            "tool.explain_match.done",
+            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
+        )
+        return result
+
+
+async def get_provider_status() -> ProviderStatusOutput:
+    """Show LLM provider configuration, circuit state, and recent call costs."""
+    settings = get_settings()
+    with request_context() as request_id:
+        logger.info(
+            "tool.get_provider_status.start",
+            extra={"fields": {"request_id": request_id}},
+        )
+        router = get_llm_router()
+        statuses = await router.statuses()
+        async with session_scope() as session:
+            calls = await get_recent_llm_calls(session, settings.llm_recent_calls_limit)
+        records = [to_llm_call_record(call) for call in calls]
+
+        counts: dict[str, int] = {}
+        costs: dict[str, float] = {}
+        for record in records:
+            counts[record.provider] = counts.get(record.provider, 0) + 1
+            costs[record.provider] = costs.get(record.provider, 0.0) + record.cost_estimate
+
+        providers: list[ProviderStatus] = [
+            status.model_copy(
+                update={
+                    "recent_calls": counts.get(status.name, 0),
+                    "recent_cost_estimate": round(costs.get(status.name, 0.0), 6),
+                }
+            )
+            for status in statuses
+        ]
+        result = ProviderStatusOutput(
+            providers=providers,
+            recent_calls=records,
+            total_cost_estimate=round(sum(costs.values()), 6),
+        )
+        logger.info(
+            "tool.get_provider_status.done",
+            extra={
+                "fields": {
+                    "providers": len(providers),
+                    "recent_calls": len(records),
+                    "request_id": request_id,
+                }
+            },
+        )
+        return result
+
+
+def _seniority_fit(breakdown: ScoreBreakdown) -> str:
+    component = breakdown.components.get("seniority")
+    return component.detail if component is not None else ""
+
+
+def _suggestions(breakdown: ScoreBreakdown) -> list[str]:
+    suggestions = [
+        f"Add concrete evidence for {skill} to the resume."
+        for skill in breakdown.missing_skills[:5]
+    ]
+    if not suggestions and breakdown.matched_skills:
+        suggestions.append("Keep the matched skills prominent in the resume summary.")
+    if not suggestions:
+        suggestions.append(
+            "Add more detail about relevant tools, projects, and outcomes to improve the match."
+        )
+    return suggestions

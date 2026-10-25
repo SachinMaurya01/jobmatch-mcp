@@ -214,7 +214,7 @@ class RerankDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     index: int = Field(ge=0)
-    adjustment: float = Field(ge=-10.0, le=10.0)
+    adjustment: float
     explanation: str = Field(min_length=1, max_length=600)
     matched_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)

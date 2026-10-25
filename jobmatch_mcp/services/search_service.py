@@ -152,9 +152,7 @@ class SearchService:
                 if vector is not None:
                     resume_embedding = vector
                     resume_embedding_model = expected_model
-                    await update_resume_embedding(
-                        session, resume.id, vector, expected_model
-                    )
+                    await update_resume_embedding(session, resume.id, vector, expected_model)
 
             if resume_embedding is not None and resume_embedding_model == expected_model:
                 await self._notify(progress, 78, 100, "Embedding postings")

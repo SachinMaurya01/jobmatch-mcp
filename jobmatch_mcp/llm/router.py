@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import httpx
 
@@ -161,14 +161,8 @@ class LLMRouter:
             breaker = self._breakers[provider.name]
             configured = provider.configured
             allowed = self._allowed(provider)
-            circuit_state = cast(
-                Literal["closed", "open", "half_open"], breaker.state.value
-            )
-            available = (
-                allowed
-                and circuit_state != "open"
-                and health.get(provider.name, True)
-            )
+            circuit_state = breaker.state.value
+            available = allowed and circuit_state != "open" and health.get(provider.name, True)
             if not configured:
                 detail = "not configured"
             elif provider.hosted and not self._hosted_fallback_enabled:

@@ -202,9 +202,7 @@ class OpenAIProvider:
 
     async def health(self) -> bool:
         try:
-            response = await self._http().get(
-                f"{self._base_url}/models", headers=self._headers()
-            )
+            response = await self._http().get(f"{self._base_url}/models", headers=self._headers())
         except httpx.HTTPError:
             return False
         return response.is_success
@@ -312,9 +310,7 @@ class AnthropicProvider:
 
     async def health(self) -> bool:
         try:
-            response = await self._http().get(
-                f"{self._base_url}/models", headers=self._headers()
-            )
+            response = await self._http().get(f"{self._base_url}/models", headers=self._headers())
         except httpx.HTTPError:
             return False
         return response.is_success

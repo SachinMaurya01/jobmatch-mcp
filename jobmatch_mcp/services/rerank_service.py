@@ -57,9 +57,7 @@ class RerankService:
             return RerankOutcome(jobs=jobs)
 
         top = jobs[: self._top_n]
-        payloads = [
-            self._job_payload(index, item) for index, item in enumerate(top)
-        ]
+        payloads = [self._job_payload(index, item) for index, item in enumerate(top)]
         try:
             route = await self._router.generate_structured(
                 system=rerank_system_prompt(self._max_adjustment),
@@ -104,9 +102,7 @@ class RerankService:
             if decision is None:
                 reranked_top.append(item)
                 continue
-            adjustment = max(
-                -self._max_adjustment, min(self._max_adjustment, decision.adjustment)
-            )
+            adjustment = max(-self._max_adjustment, min(self._max_adjustment, decision.adjustment))
             pre_total = (
                 item.breakdown.pre_rerank_total
                 if item.breakdown.pre_rerank_total is not None
