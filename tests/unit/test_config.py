@@ -15,6 +15,11 @@ def test_defaults_and_jsearch_flag() -> None:
     assert settings.min_match_score == 60.0
     assert settings.disable_hosted_fallback is True
     assert settings.jsearch_configured is False
+    assert settings.transport == "stdio"
+    assert settings.http_host == "127.0.0.1"
+    assert settings.http_port == 8000
+    assert settings.http_path == "/mcp"
+    assert settings.enable_elicitation is True
 
 
 def test_jsearch_configured_requires_api_key() -> None:
@@ -40,3 +45,8 @@ def test_rejects_minimum_match_score_below_60() -> None:
 def test_rejects_all_zero_structured_weights() -> None:
     with pytest.raises(ValidationError):
         ScoringWeights(skills=0, experience=0, seniority=0, location=0, salary=0)
+
+
+def test_rejects_http_path_without_leading_slash() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, http_path="mcp")

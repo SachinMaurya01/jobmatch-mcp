@@ -22,6 +22,8 @@ from jobmatch_mcp.db.repositories import (
     get_latest_resume,
     get_or_create_default_user,
     get_recent_llm_calls,
+    get_search_for_user,
+    get_search_results,
     to_job_record,
     to_llm_call_record,
     update_resume_embedding,
@@ -122,6 +124,14 @@ async def test_resume_job_search_roundtrip(database_url: str) -> None:
 
         count = await session.scalar(text("SELECT count(*) FROM matches"))
         assert count == 1
+
+        saved = await get_search_for_user(session, user.id, search.id)
+        assert saved is not None
+        assert saved.resume_id == resume.id
+        rows = await get_search_results(session, search.id)
+        assert len(rows) == 1
+        assert rows[0][0].score == 92.5
+        assert rows[0][1].id == row.id
 
 
 async def test_embeddings_and_llm_calls_roundtrip(database_url: str) -> None:

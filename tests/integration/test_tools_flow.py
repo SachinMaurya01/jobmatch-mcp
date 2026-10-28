@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Iterator
 
@@ -18,7 +19,7 @@ from jobmatch_mcp.core.errors import ConnectorError
 from jobmatch_mcp.db.session import dispose_engine, get_session_factory
 from jobmatch_mcp.matching.dedupe import normalize_dedupe_key
 from jobmatch_mcp.schemas import RawJob, SearchCriteria
-from jobmatch_mcp.server import tools
+from jobmatch_mcp.server import resources, tools
 
 pytestmark = pytest.mark.integration
 
@@ -162,6 +163,19 @@ async def test_parse_search_and_details(database_url: str, monkeypatch: pytest.M
     details = await tools.get_job_details(search.results[0].job_id)
     assert details.job.title == "Senior Python Engineer"
     assert details.job.source == "fake"
+
+    resume_resource = json.loads(await resources.current_resume())
+    assert resume_resource["resume_id"] == str(parsed.resume_id)
+    assert resume_resource["profile"]["skills"]
+
+    job_resource = json.loads(await resources.job(str(search.results[0].job_id)))
+    assert job_resource["job"]["title"] == "Senior Python Engineer"
+
+    saved_search = json.loads(await resources.search(str(search.search_id)))
+    assert saved_search["search_id"] == str(search.search_id)
+    assert saved_search["result_count"] == 1
+    assert saved_search["results"][0]["job_id"] == str(search.results[0].job_id)
+    assert saved_search["results"][0]["score"] == 100
 
 
 async def test_cross_source_dedupe_and_partial_results(
