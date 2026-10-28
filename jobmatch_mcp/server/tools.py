@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastmcp import Context
 
-from jobmatch_mcp.core.config import get_settings
+from jobmatch_mcp.core.config import Settings, get_settings
 from jobmatch_mcp.core.errors import InvalidInputError, NotFoundError
 from jobmatch_mcp.core.logging import get_logger, request_context
 from jobmatch_mcp.db.repositories import (
@@ -28,6 +28,7 @@ from jobmatch_mcp.schemas import (
     ScoreBreakdown,
     SearchCriteria,
     SearchJobsOutput,
+    SearchPreferences,
 )
 from jobmatch_mcp.server.deps import (
     get_embedding_service,
@@ -111,6 +112,7 @@ async def search_jobs(
         min_salary=min_salary,
         limit=effective_limit,
     )
+    criteria = await _elicit_search_preferences(ctx, settings, criteria)
 
     with request_context() as request_id:
         logger.info(
@@ -282,6 +284,67 @@ async def get_provider_status() -> ProviderStatusOutput:
             },
         )
         return result
+
+
+async def _elicit_search_preferences(
+    ctx: Context | None,
+    settings: Settings,
+    criteria: SearchCriteria,
+) -> SearchCriteria:
+    if not settings.enable_elicitation or ctx is None:
+        return criteria
+    if criteria.locations or criteria.remote is not None or criteria.min_salary is not None:
+        return criteria
+    elicit = getattr(ctx, "elicit", None)
+    if not callable(elicit):
+        return criteria
+
+    try:
+        response = await elicit(
+            "Optionally add a location, remote preference, or salary floor for this search.",
+            SearchPreferences,
+        )
+    except Exception as exc:
+        logger.info(
+            "tool.search_jobs.elicitation_unavailable",
+            extra={"fields": {"error": type(exc).__name__}},
+        )
+        return criteria
+
+    if getattr(response, "action", None) != "accept":
+        return criteria
+    data = getattr(response, "data", None)
+    if data is None:
+        return criteria
+    try:
+        preferences = (
+            data if isinstance(data, SearchPreferences) else SearchPreferences.model_validate(data)
+        )
+    except Exception as exc:
+        logger.info(
+            "tool.search_jobs.elicitation_invalid",
+            extra={"fields": {"error": type(exc).__name__}},
+        )
+        return criteria
+
+    locations = criteria.locations
+    if preferences.locations:
+        locations = [item.strip() for item in preferences.locations.split(",") if item.strip()]
+    remote = criteria.remote
+    if preferences.remote == "remote":
+        remote = True
+    elif preferences.remote == "onsite":
+        remote = False
+    min_salary = criteria.min_salary
+    if preferences.min_salary > 0:
+        min_salary = preferences.min_salary
+    return criteria.model_copy(
+        update={
+            "locations": locations,
+            "remote": remote,
+            "min_salary": min_salary,
+        }
+    )
 
 
 def _seniority_fit(breakdown: ScoreBreakdown) -> str:

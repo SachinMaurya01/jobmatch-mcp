@@ -151,6 +151,26 @@ async def create_search(
     return search
 
 
+async def get_search_for_user(
+    session: AsyncSession, user_id: UUID, search_id: UUID
+) -> Search | None:
+    return await session.scalar(
+        select(Search).where(Search.id == search_id, Search.user_id == user_id)
+    )
+
+
+async def get_search_results(session: AsyncSession, search_id: UUID) -> list[tuple[Match, Job]]:
+    rows = (
+        await session.execute(
+            select(Match, Job)
+            .join(Job, Match.job_id == Job.id)
+            .where(Match.search_id == search_id)
+            .order_by(Match.rank)
+        )
+    ).all()
+    return [(match, job) for match, job in rows]
+
+
 async def create_matches(
     session: AsyncSession,
     search_id: UUID,

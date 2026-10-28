@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     min_match_score: float = Field(default=60.0, ge=60.0, le=100.0)
     max_resume_bytes: int = Field(default=5_000_000, ge=1)
     max_job_description_chars: int = Field(default=5_000, ge=100)
+    enable_elicitation: bool = True
+
+    transport: Literal["stdio", "http"] = "stdio"
+    http_host: str = "127.0.0.1"
+    http_port: int = Field(default=8000, ge=1, le=65535)
+    http_path: str = Field(default="/mcp", pattern=r"^/")
+    http_bearer_token: str | None = None
+    http_json_response: bool = False
+    http_stateless: bool = False
 
     connector_cache_ttl_seconds: float = Field(default=300.0, ge=0.0)
     connector_cache_max_entries: int = Field(default=256, ge=1)

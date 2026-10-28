@@ -11,15 +11,20 @@ Built
 - Bounded LLM re-rank over the strongest matches (top 20, ±10 points) with per-job explanations and suggestions
 - Provider router with fixed Ollama → OpenAI → Claude fallback, per-provider circuit breakers, call accounting, and a local-only privacy switch
 - explain_match returns the stored breakdown, matched/missing skills, seniority fit, and suggestions; get_provider_status reports circuit state, latency, and cost
+- MCP resources: resume://current, job://{id}, and search://{id} for the saved search and ranked results
+- Guided prompts: find_jobs_for_resume and compare_top_matches
+- Elicitation asks for missing location, remote, and salary preferences when the client supports it; client cancellation propagates instead of becoming a warning
+- Versioned structured outputs use schema_version; searches and matches are persisted for resource reads
+- Streamable HTTP transport with bearer-token authentication, plus stdio for Claude Desktop
 - Jobs scoring below 60 are never ranked, persisted, or returned; each search is capped at 30 results
 - PostgreSQL + pgvector models and Alembic migrations for users, resumes, jobs, searches, matches, llm_calls, and HNSW embedding indexes
 - JSON logging with email/phone redaction, config via JOBMATCH_*, Dockerfile, Compose, .env.example, GitHub Actions
-- Unit, connector contract, ranking-quality evaluation, router failure-injection, and PostgreSQL integration tests
+- Unit, connector contract, ranking-quality evaluation, router failure-injection, MCP protocol, and PostgreSQL integration tests
 
 Verification
 - ruff check / ruff format --check: passed
 - mypy strict: passed
-- pytest: 83 passed, 4 skipped without an integration database; 87 passed with pgvector (temporary container)
+- pytest: 97 passed, 4 skipped without an integration database; 101 passed with pgvector (temporary container)
 - pip-audit: no known vulnerabilities
 
 ## Run
@@ -31,9 +36,31 @@ Verification
 - uv run alembic upgrade head
 - uv run python -m jobmatch_mcp
 
+Stdio is the default for Claude Desktop. For MCP Inspector or another HTTP
+client, set a bearer token and start the Streamable HTTP transport:
+
+- `JOBMATCH_HTTP_BEARER_TOKEN=change-me uv run python -m jobmatch_mcp --transport http`
+- The endpoint is `http://127.0.0.1:8000/mcp/` by default; override it with
+  `--host`, `--port`, and `--path` or the matching `JOBMATCH_HTTP_*` variables.
+- In MCP Inspector choose Streamable HTTP, use the endpoint above, and add the
+  header `Authorization: Bearer change-me`.
+- HTTP refuses to start without a bearer token. The token is never logged.
+
 Hosted fallback stays disabled by default. To allow OpenAI or Claude, set the
 matching API key and `JOBMATCH_DISABLE_HOSTED_FALLBACK=false`. If local models
 are unavailable, searches still return structured-only results with warnings.
+
+## MCP resources and prompts
+
+- `resume://current` returns the latest parsed profile and resume id.
+- `job://{id}` returns one stored job with its source link.
+- `search://{id}` returns a saved search, its criteria, and ranked results.
+- `find_jobs_for_resume` guides the assistant through loading the resume,
+  searching, and summarizing the top matches.
+- `compare_top_matches` guides a side-by-side comparison of a saved search.
+- When `JOBMATCH_ENABLE_ELICITATION=true`, `search_jobs` asks for a location,
+  remote preference, or salary floor if the client supports elicitation and
+  none were supplied. Declining proceeds with the original criteria.
 
 ## Hybrid ranking and LLM routing
 

@@ -61,6 +61,26 @@ class SearchCriteria(BaseModel):
     limit: int = Field(default=30, ge=1, le=30)
 
 
+class SearchPreferences(BaseModel):
+    """Optional details elicited from the user before a search."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    locations: str = Field(
+        default="",
+        description="Comma-separated locations, for example 'Bengaluru, Remote'.",
+    )
+    remote: Literal["any", "remote", "onsite"] = Field(
+        default="any",
+        description="Choose remote-only, on-site-only, or no preference.",
+    )
+    min_salary: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum annual salary floor; 0 means no floor.",
+    )
+
+
 class ComponentScore(BaseModel):
     score: float = Field(ge=0.0, le=100.0)
     weight: float = Field(ge=0.0)
@@ -138,6 +158,13 @@ class ParseResumeOutput(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ResumeResourceOutput(BaseModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    resume_id: UUID
+    profile: ResumeProfile
+    created_at: datetime
+
+
 class SearchJobsOutput(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     search_id: UUID
@@ -146,6 +173,16 @@ class SearchJobsOutput(BaseModel):
     sources_used: list[str] = Field(default_factory=list)
     source_statuses: list[SourceStatus] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    results: list[RankedJob] = Field(default_factory=list)
+
+
+class SavedSearchOutput(BaseModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    search_id: UUID
+    resume_id: UUID
+    criteria: SearchCriteria
+    created_at: datetime
+    result_count: int = Field(ge=0)
     results: list[RankedJob] = Field(default_factory=list)
 
 
