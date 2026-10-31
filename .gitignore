@@ -46,5 +46,5 @@ pgdata/
 Thumbs.db
 
 # # Internal project documents
-# PRD.md
-# AGENTS.md
+PRD.md
+AGENTS.md
