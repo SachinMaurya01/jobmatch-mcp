@@ -15,21 +15,37 @@ services:
       timeout: 3s
       retries: 20
 
-  mcp-server:
-    profiles: ["app"]
-    build: .
-    stdin_open: true
-    tty: true
+  pgadmin:
+    image: dpage/pgadmin4:9
     environment:
-      JOBMATCH_DATABASE_URL: postgresql+psycopg://jobmatch:jobmatch@postgres:5432/jobmatch
-      JOBMATCH_JSEARCH_API_KEY: ${JOBMATCH_JSEARCH_API_KEY:-}
-      JOBMATCH_JSEARCH_COUNTRY: ${JOBMATCH_JSEARCH_COUNTRY:-in}
-      JOBMATCH_SEARCH_DEFAULT_LIMIT: ${JOBMATCH_SEARCH_DEFAULT_LIMIT:-30}
-      JOBMATCH_SEARCH_MAX_LIMIT: ${JOBMATCH_SEARCH_MAX_LIMIT:-30}
-      JOBMATCH_MIN_MATCH_SCORE: ${JOBMATCH_MIN_MATCH_SCORE:-60}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@jobmatch.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-jobmatch}
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
     depends_on:
       postgres:
         condition: service_healthy
 
+  # mcp-server:
+  #   profiles: ["app"]
+  #   build: .
+  #   stdin_open: true
+  #   tty: true
+  #   environment:
+  #     JOBMATCH_DATABASE_URL: postgresql+psycopg://jobmatch:jobmatch@postgres:5432/jobmatch
+  #     JOBMATCH_JSEARCH_API_KEY: ${JOBMATCH_JSEARCH_API_KEY:-}
+  #     JOBMATCH_JSEARCH_COUNTRY: ${JOBMATCH_JSEARCH_COUNTRY:-in}
+  #     JOBMATCH_SEARCH_DEFAULT_LIMIT: ${JOBMATCH_SEARCH_DEFAULT_LIMIT:-30}
+  #     JOBMATCH_SEARCH_MAX_LIMIT: ${JOBMATCH_SEARCH_MAX_LIMIT:-30}
+  #     JOBMATCH_MIN_MATCH_SCORE: ${JOBMATCH_MIN_MATCH_SCORE:-60}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
 volumes:
   pgdata:
+  pgadmin_data:

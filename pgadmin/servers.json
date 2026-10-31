@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "JobMatch Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "jobmatch",
+      "Username": "jobmatch",
+      "Password": "jobmatch",
+      "SSLMode": "prefer"
+    }
+  }
+}
