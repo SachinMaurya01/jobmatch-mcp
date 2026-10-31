@@ -7,6 +7,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel
 
+from opentelemetry import trace
 from jobmatch_mcp.schemas import RawJob, SearchCriteria
 
 
@@ -20,6 +21,8 @@ class JobConnector(ABC):
     name: ClassVar[str]
     capabilities: ClassVar[frozenset[str]] = frozenset()
     rate_limit_per_minute: ClassVar[int | None] = None
+
+    _tracer = trace.get_tracer(__name__)
 
     @abstractmethod
     async def search(self, criteria: SearchCriteria) -> list[RawJob]:

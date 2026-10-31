@@ -17,7 +17,10 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
+from opentelemetry import trace as trace_api
+
 from jobmatch_mcp.core.redaction import redact, redact_value
+from jobmatch_mcp.core.telemetry import inject_trace_context_into_log
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
@@ -29,13 +32,16 @@ class JsonFormatter(logging.Formatter):
     """Render log records as single-line JSON."""
 
     def format(self, record: logging.LogRecord) -> str:
+        # Inject OpenTelemetry span context if available
+        inject_trace_context_into_log(record)
+
         payload: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": redact(record.getMessage()),
-            "request_id": request_id_var.get(),
-            "trace_id": trace_id_var.get(),
+            "request_id": record.fields.get("request_id") if record.fields else request_id_var.get(),
+            "trace_id": record.fields.get("trace_id") if record.fields else trace_id_var.get(),
         }
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):

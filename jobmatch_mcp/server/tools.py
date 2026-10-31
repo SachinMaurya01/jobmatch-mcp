@@ -9,6 +9,8 @@ from fastmcp import Context
 from jobmatch_mcp.core.config import Settings, get_settings
 from jobmatch_mcp.core.errors import InvalidInputError, NotFoundError
 from jobmatch_mcp.core.logging import get_logger, request_context
+from opentelemetry import trace
+from jobmatch_mcp.core.telemetry import get_tracer
 from jobmatch_mcp.db.repositories import (
     get_job,
     get_latest_match_for_job,
@@ -42,6 +44,31 @@ from jobmatch_mcp.services.search_service import ProgressCallback, SearchService
 
 logger = get_logger(__name__)
 
+# Tracer for OpenTelemetry spans
+tracer = get_tracer("jobmatch-mcp-tools")
+
+# Tool operation span names
+SPAN_PARSE_RESUME = "tool.parse_resume"
+SPAN_SEARCH_JOBS = "tool.search_jobs"
+SPAN_LIST_SOURCES = "tool.list_sources"
+SPAN_GET_JOB_DETAILS = "tool.get_job_details"
+SPAN_EXPLAIN_MATCH = "tool.explain_match"
+SPAN_GET_PROVIDER_STATUS = "tool.get_provider_status"
+
+def _with_tracer_span(span_name: str, fn, *args, **kwargs):
+    """Execute a function within an OpenTelemetry span."""
+    with tracer.start_as_current_span(span_name) as span:
+        span.set_attribute("operation.name", span_name)
+        try:
+            result = fn(*args, **kwargs)
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
+
+
 
 async def parse_resume(
     path: str | None = None,
@@ -54,28 +81,36 @@ async def parse_resume(
     """
     settings = get_settings()
     with request_context() as request_id:
-        logger.info(
-            "tool.parse_resume.start",
-            extra={"fields": {"has_path": path is not None, "text_chars": len(text or "")}},
-        )
-        async with session_scope() as session:
-            service = ResumeService(
-                settings.max_resume_bytes,
-                embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+        span = tracer.start_as_current_span(SPAN_PARSE_RESUME)
+        span.set_attribute("operation.name", SPAN_PARSE_RESUME)
+        try:
+            logger.info(
+                "tool.parse_resume.start",
+                extra={"fields": {"has_path": path is not None, "text_chars": len(text or "")}},
             )
-            resume, profile, warnings = await service.parse_and_store(session, path=path, text=text)
-            result = ParseResumeOutput(resume_id=resume.id, profile=profile, warnings=warnings)
-        logger.info(
-            "tool.parse_resume.done",
-            extra={
-                "fields": {
-                    "resume_id": str(result.resume_id),
-                    "skills": len(profile.skills),
-                    "request_id": request_id,
-                }
-            },
-        )
-        return result
+            async with session_scope() as session:
+                service = ResumeService(
+                    settings.max_resume_bytes,
+                    embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+                )
+                resume, profile, warnings = await service.parse_and_store(session, path=path, text=text)
+                result = ParseResumeOutput(resume_id=resume.id, profile=profile, warnings=warnings)
+            logger.info(
+                "tool.parse_resume.done",
+                extra={
+                    "fields": {
+                        "resume_id": str(result.resume_id),
+                        "skills": len(profile.skills),
+                        "request_id": request_id,
+                    }
+                },
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def search_jobs(
@@ -115,87 +150,112 @@ async def search_jobs(
     criteria = await _elicit_search_preferences(ctx, settings, criteria)
 
     with request_context() as request_id:
-        logger.info(
-            "tool.search_jobs.start",
-            extra={
-                "fields": {
-                    "has_query": criteria.query is not None,
-                    "locations": len(criteria.locations),
-                    "remote": criteria.remote,
-                    "min_salary": criteria.min_salary,
-                    "limit": criteria.limit,
-                }
-            },
-        )
-        service = SearchService(
-            registry=get_registry(),
-            match_service=MatchService(settings.scoring_weights, settings.min_match_score),
-            max_results=settings.search_max_limit,
-            embedding_service=(get_embedding_service() if settings.enable_semantic else None),
-            rerank_service=(get_rerank_service() if settings.enable_llm_rerank else None),
-        )
-        progress: ProgressCallback | None = None
-        if ctx is not None:
+        span = tracer.start_as_current_span(SPAN_SEARCH_JOBS)
+        span.set_attribute("operation.name", SPAN_SEARCH_JOBS)
+        try:
+            logger.info(
+                "tool.search_jobs.start",
+                extra={
+                    "fields": {
+                        "has_query": criteria.query is not None,
+                        "locations": len(criteria.locations),
+                        "remote": criteria.remote,
+                        "min_salary": criteria.min_salary,
+                        "limit": criteria.limit,
+                    }
+                },
+            )
+            service = SearchService(
+                registry=get_registry(),
+                match_service=MatchService(settings.scoring_weights, settings.min_match_score),
+                max_results=settings.search_max_limit,
+                embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+                rerank_service=(get_rerank_service() if settings.enable_llm_rerank else None),
+            )
+            progress: ProgressCallback | None = None
+            if ctx is not None:
 
-            async def report(current: float, total: float, message: str) -> None:
-                await ctx.report_progress(current, total, message)
+                async def report(current: float, total: float, message: str) -> None:
+                    await ctx.report_progress(current, total, message)
 
-            progress = report
+                progress = report
 
-        async with session_scope() as session:
-            result = await service.search(session, criteria, sources, progress)
-        logger.info(
-            "tool.search_jobs.done",
-            extra={
-                "fields": {
-                    "search_id": str(result.search_id),
-                    "count": result.count,
-                    "sources": result.sources_used,
-                    "warnings": len(result.warnings),
-                    "request_id": request_id,
-                }
-            },
-        )
-        return result
+            async with session_scope() as session:
+                result = await service.search(session, criteria, sources, progress)
+            logger.info(
+                "tool.search_jobs.done",
+                extra={
+                    "fields": {
+                        "search_id": str(result.search_id),
+                        "count": result.count,
+                        "sources": result.sources_used,
+                        "warnings": len(result.warnings),
+                        "request_id": request_id,
+                    }
+                },
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def list_sources() -> ListSourcesOutput:
     """List enabled job sources with health, last success, and rate-limit state."""
     with request_context() as request_id:
-        logger.info(
-            "tool.list_sources.start",
-            extra={"fields": {"request_id": request_id}},
-        )
-        statuses = await get_registry().statuses()
-        logger.info(
-            "tool.list_sources.done",
-            extra={
-                "fields": {
-                    "count": len(statuses),
-                    "request_id": request_id,
-                }
-            },
-        )
-        return ListSourcesOutput(sources=statuses)
+        span = tracer.start_as_current_span(SPAN_LIST_SOURCES)
+        span.set_attribute("operation.name", SPAN_LIST_SOURCES)
+        try:
+            logger.info(
+                "tool.list_sources.start",
+                extra={"fields": {"request_id": request_id}},
+            )
+            statuses = await get_registry().statuses()
+            logger.info(
+                "tool.list_sources.done",
+                extra={
+                    "fields": {
+                        "count": len(statuses),
+                        "request_id": request_id,
+                    }
+                },
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return ListSourcesOutput(sources=statuses)
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def get_job_details(job_id: UUID) -> JobDetailsOutput:
     """Return the full stored record for one job, including the source link."""
     with request_context() as request_id:
-        logger.info(
-            "tool.get_job_details.start",
-            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
-        )
-        async with session_scope() as session:
-            job = await get_job(session, job_id)
-            if job is None:
-                raise NotFoundError(f"No job found with id {job_id}")
-            result = JobDetailsOutput(job=to_job_record(job))
-        logger.info(
-            "tool.get_job_details.done",
-            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
-        )
-        return result
+        span = tracer.start_as_current_span(SPAN_GET_JOB_DETAILS)
+        span.set_attribute("operation.name", SPAN_GET_JOB_DETAILS)
+        span.set_attribute("job.id", str(job_id))
+        try:
+            logger.info(
+                "tool.get_job_details.start",
+                extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
+            )
+            async with session_scope() as session:
+                job = await get_job(session, job_id)
+                if job is None:
+                    raise NotFoundError(f"No job found with id {job_id}")
+                result = JobDetailsOutput(job=to_job_record(job))
+            logger.info(
+                "tool.get_job_details.done",
+                extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def explain_match(job_id: UUID) -> ExplainMatchOutput:
@@ -205,85 +265,102 @@ async def explain_match(job_id: UUID) -> ExplainMatchOutput:
     score breakdown. Run `search_jobs` first so a match exists.
     """
     with request_context() as request_id:
-        logger.info(
-            "tool.explain_match.start",
-            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
-        )
-        async with session_scope() as session:
-            job = await get_job(session, job_id)
-            if job is None:
-                raise NotFoundError(f"No job found with id {job_id}")
-            user = await get_or_create_default_user(session)
-            latest = await get_latest_match_for_job(session, user.id, job_id)
-            if latest is None:
-                raise NotFoundError(f"No stored match for job {job_id}. Run search_jobs first.")
-            match, search = latest
-            breakdown = ScoreBreakdown.model_validate(match.breakdown)
-            result = ExplainMatchOutput(
-                job_id=job.id,
-                search_id=search.id,
-                score=match.score,
-                rank=match.rank,
-                explanation=match.explanation,
-                matched_skills=breakdown.matched_skills,
-                missing_skills=breakdown.missing_skills,
-                seniority_fit=breakdown.seniority_fit or _seniority_fit(breakdown),
-                suggestions=breakdown.suggestions or _suggestions(breakdown),
-                breakdown=breakdown,
-                created_at=search.created_at,
+        span = tracer.start_as_current_span(SPAN_EXPLAIN_MATCH)
+        span.set_attribute("operation.name", SPAN_EXPLAIN_MATCH)
+        span.set_attribute("job.id", str(job_id))
+        try:
+            logger.info(
+                "tool.explain_match.start",
+                extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
             )
-        logger.info(
-            "tool.explain_match.done",
-            extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
-        )
-        return result
+            async with session_scope() as session:
+                job = await get_job(session, job_id)
+                if job is None:
+                    raise NotFoundError(f"No job found with id {job_id}")
+                user = await get_or_create_default_user(session)
+                latest = await get_latest_match_for_job(session, user.id, job_id)
+                if latest is None:
+                    raise NotFoundError(f"No stored match for job {job_id}. Run search_jobs first.")
+                match, search = latest
+                breakdown = ScoreBreakdown.model_validate(match.breakdown)
+                result = ExplainMatchOutput(
+                    job_id=job.id,
+                    search_id=search.id,
+                    score=match.score,
+                    rank=match.rank,
+                    explanation=match.explanation,
+                    matched_skills=breakdown.matched_skills,
+                    missing_skills=breakdown.missing_skills,
+                    seniority_fit=breakdown.seniority_fit or _seniority_fit(breakdown),
+                    suggestions=breakdown.suggestions or _suggestions(breakdown),
+                    breakdown=breakdown,
+                    created_at=search.created_at,
+                )
+            logger.info(
+                "tool.explain_match.done",
+                extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def get_provider_status() -> ProviderStatusOutput:
     """Show LLM provider configuration, circuit state, and recent call costs."""
     settings = get_settings()
     with request_context() as request_id:
-        logger.info(
-            "tool.get_provider_status.start",
-            extra={"fields": {"request_id": request_id}},
-        )
-        router = get_llm_router()
-        statuses = await router.statuses()
-        async with session_scope() as session:
-            calls = await get_recent_llm_calls(session, settings.llm_recent_calls_limit)
-        records = [to_llm_call_record(call) for call in calls]
-
-        counts: dict[str, int] = {}
-        costs: dict[str, float] = {}
-        for record in records:
-            counts[record.provider] = counts.get(record.provider, 0) + 1
-            costs[record.provider] = costs.get(record.provider, 0.0) + record.cost_estimate
-
-        providers: list[ProviderStatus] = [
-            status.model_copy(
-                update={
-                    "recent_calls": counts.get(status.name, 0),
-                    "recent_cost_estimate": round(costs.get(status.name, 0.0), 6),
-                }
+        span = tracer.start_as_current_span(SPAN_GET_PROVIDER_STATUS)
+        span.set_attribute("operation.name", SPAN_GET_PROVIDER_STATUS)
+        try:
+            logger.info(
+                "tool.get_provider_status.start",
+                extra={"fields": {"request_id": request_id}},
             )
-            for status in statuses
-        ]
-        result = ProviderStatusOutput(
-            providers=providers,
-            recent_calls=records,
-            total_cost_estimate=round(sum(costs.values()), 6),
-        )
-        logger.info(
-            "tool.get_provider_status.done",
-            extra={
-                "fields": {
-                    "providers": len(providers),
-                    "recent_calls": len(records),
-                    "request_id": request_id,
-                }
-            },
-        )
-        return result
+            router = get_llm_router()
+            statuses = await router.statuses()
+            async with session_scope() as session:
+                calls = await get_recent_llm_calls(session, settings.llm_recent_calls_limit)
+            records = [to_llm_call_record(call) for call in calls]
+
+            counts: dict[str, int] = {}
+            costs: dict[str, float] = {}
+            for record in records:
+                counts[record.provider] = counts.get(record.provider, 0) + 1
+                costs[record.provider] = costs.get(record.provider, 0.0) + record.cost_estimate
+
+            providers: list[ProviderStatus] = [
+                status.model_copy(
+                    update={
+                        "recent_calls": counts.get(status.name, 0),
+                        "recent_cost_estimate": round(costs.get(status.name, 0.0), 6),
+                    }
+                )
+                for status in statuses
+            ]
+            result = ProviderStatusOutput(
+                providers=providers,
+                recent_calls=records,
+                total_cost_estimate=round(sum(costs.values()), 6),
+            )
+            logger.info(
+                "tool.get_provider_status.done",
+                extra={
+                    "fields": {
+                        "providers": len(providers),
+                        "recent_calls": len(records),
+                        "request_id": request_id,
+                    }
+                },
+            )
+            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
+            raise
 
 
 async def _elicit_search_preferences(

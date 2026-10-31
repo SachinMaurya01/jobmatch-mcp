@@ -10,7 +10,9 @@ from typing import Any, Literal
 
 import httpx
 
+from opentelemetry import trace
 from jobmatch_mcp.core.errors import LLMOutputError, LLMUnavailableError, describe_error
+from jobmatch_mcp.core.telemetry import get_tracer
 from jobmatch_mcp.llm.base import LLMProvider
 from jobmatch_mcp.llm.circuit import CircuitBreaker
 from jobmatch_mcp.schemas import LLMCallRecord, ProviderStatus
@@ -52,6 +54,7 @@ class LLMRouter:
         self._last_failure: dict[str, datetime] = {}
         self._last_error: dict[str, str] = {}
         self._last_latency: dict[str, float] = {}
+        self._tracer = trace.get_tracer(__name__)
 
     @property
     def providers(self) -> list[LLMProvider]:
