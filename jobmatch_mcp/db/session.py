@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -13,9 +15,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from jobmatch_mcp.core.config import get_settings
+from jobmatch_mcp.core.telemetry import record_db_query
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_tracer = trace.get_tracer(__name__)
 
 
 def get_engine() -> AsyncEngine:
@@ -44,10 +48,21 @@ async def dispose_engine() -> None:
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """Provide a session that commits on success and rolls back on error."""
-    async with get_session_factory()() as session:
+    started = time.perf_counter()
+    with _tracer.start_as_current_span("db.session") as span:
         try:
-            yield session
-            await session.commit()
-        except BaseException:
-            await session.rollback()
+            async with get_session_factory()() as session:
+                try:
+                    yield session
+                    await session.commit()
+                except BaseException:
+                    await session.rollback()
+                    raise
+        except BaseException as exc:
+            span.record_exception(exc)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, type(exc).__name__))
+            record_db_query("session", (time.perf_counter() - started) * 1000, False)
             raise
+        else:
+            span.set_status(trace.Status(trace.StatusCode.OK))
+            record_db_query("session", (time.perf_counter() - started) * 1000, True)

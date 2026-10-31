@@ -2,7 +2,8 @@
 
 MCP servers using stdio must never write log output to stdout, so all log
 records are emitted on stderr. Message text and custom fields are redacted
-before serialization.
+before serialization, and the active OpenTelemetry trace context is merged
+into every record.
 """
 
 from __future__ import annotations
@@ -17,13 +18,10 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from opentelemetry import trace as trace_api
-
 from jobmatch_mcp.core.redaction import redact, redact_value
 from jobmatch_mcp.core.telemetry import inject_trace_context_into_log
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
-trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 _LOGGER_NAMES_TO_QUIET = ("httpx", "httpcore")
 
@@ -32,20 +30,27 @@ class JsonFormatter(logging.Formatter):
     """Render log records as single-line JSON."""
 
     def format(self, record: logging.LogRecord) -> str:
-        # Inject OpenTelemetry span context if available
+        fields = getattr(record, "fields", None)
+        if not isinstance(fields, dict):
+            fields = {}
+            record.__dict__["fields"] = fields
         inject_trace_context_into_log(record)
+
+        merged = redact_value(dict(getattr(record, "fields", {})))
+        request_id = merged.pop("request_id", None) or request_id_var.get()
+        trace_id = merged.pop("trace_id", None)
+        span_id = merged.pop("span_id", None)
 
         payload: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": redact(record.getMessage()),
-            "request_id": record.fields.get("request_id") if record.fields else request_id_var.get(),
-            "trace_id": record.fields.get("trace_id") if record.fields else trace_id_var.get(),
+            "request_id": request_id,
+            "trace_id": trace_id,
+            "span_id": span_id,
         }
-        fields = getattr(record, "fields", None)
-        if isinstance(fields, dict):
-            payload.update(redact_value(fields))
+        payload.update(merged)
         if record.exc_info:
             payload["exception"] = redact(self.formatException(record.exc_info))
         return json.dumps(payload, default=str, separators=(",", ":"))
@@ -70,12 +75,10 @@ def request_context(request_id: str | None = None) -> Iterator[str]:
     """Bind a request id to the current async/context scope."""
     active_id = request_id or uuid.uuid4().hex
     token = request_id_var.set(active_id)
-    trace_token = trace_id_var.set(active_id)
     try:
         yield active_id
     finally:
         request_id_var.reset(token)
-        trace_id_var.reset(trace_token)
 
 
 def get_logger(name: str) -> logging.Logger:

@@ -6,9 +6,9 @@ import re
 from typing import Any
 
 import httpx
+from opentelemetry import trace
 
 from jobmatch_mcp.connectors.base import ConnectorHealth, JobConnector
-from jobmatch_mcp.core.telemetry import get_tracer
 from jobmatch_mcp.connectors.common import (
     clean_text,
     detect_remote,
@@ -51,9 +51,8 @@ class GreenhouseConnector(JobConnector):
             self._client = None
 
     async def health(self) -> ConnectorHealth:
-        span = self._tracer.start_as_current_span("connector.greenhouse.health")
-        span.set_attribute("connector.name", self.name)
-        try:
+        with self._tracer.start_as_current_span("connector.greenhouse.health") as span:
+            span.set_attribute("connector.name", self.name)
             if not self._boards:
                 return ConnectorHealth(
                     name=self.name,
@@ -65,39 +64,34 @@ class GreenhouseConnector(JobConnector):
                 ok=True,
                 detail=f"{len(self._boards)} board(s) configured (health probe not performed)",
             )
-        finally:
-            span.set_status(trace.Status(trace.StatusCode.OK))
-            span.end()
 
     async def search(self, criteria: SearchCriteria) -> list[RawJob]:
-        span = self._tracer.start_as_current_span("connector.greenhouse.search")
-        span.set_attribute("connector.name", self.name)
-        span.set_attribute("connector.query", criteria.query or "")
-        try:
-            if not self._boards:
-                raise ConfigurationError(
-                    "Greenhouse is not configured. Set JOBMATCH_GREENHOUSE_BOARDS."
-                )
+        with self._tracer.start_as_current_span("connector.greenhouse.search") as span:
+            span.set_attribute("connector.name", self.name)
+            span.set_attribute("connector.query", criteria.query or "")
+            try:
+                if not self._boards:
+                    raise ConfigurationError(
+                        "Greenhouse is not configured. Set JOBMATCH_GREENHOUSE_BOARDS."
+                    )
 
-            jobs: list[RawJob] = []
-            for board in self._boards:
-                if len(jobs) >= criteria.limit:
-                    break
-                payload = await self._fetch_board(board)
-                for item in payload:
-                    parsed = self._parse_item(board, item, criteria)
-                    if parsed is None:
-                        continue
-                    jobs.append(parsed)
+                jobs: list[RawJob] = []
+                for board in self._boards:
                     if len(jobs) >= criteria.limit:
                         break
-            return jobs
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
-            raise
-        finally:
-            span.end()
+                    payload = await self._fetch_board(board)
+                    for item in payload:
+                        parsed = self._parse_item(board, item, criteria)
+                        if parsed is None:
+                            continue
+                        jobs.append(parsed)
+                        if len(jobs) >= criteria.limit:
+                            break
+                return jobs
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, type(exc).__name__))
+                raise
 
     async def _fetch_board(self, board: str) -> list[Any]:
         url = f"{self._settings.greenhouse_base_url.rstrip('/')}/boards/{board}/jobs"

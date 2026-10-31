@@ -8,8 +8,11 @@ from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 from jobmatch_mcp.connectors.base import ConnectorHealth, JobConnector
 from jobmatch_mcp.core.errors import ConnectorError, describe_error
+from jobmatch_mcp.core.telemetry import record_cache_event, record_source_call
 from jobmatch_mcp.schemas import RawJob, SearchCriteria, SourceStatus
 
 
@@ -117,6 +120,7 @@ class ConnectorRuntime:
         self._last_error: str | None = None
         self._cache_hits = 0
         self._cache_misses = 0
+        self._tracer = trace.get_tracer(__name__)
 
     @property
     def name(self) -> str:
@@ -135,26 +139,40 @@ class ConnectorRuntime:
         cached = self._cache.get(cache_key)
         if cached is not None:
             self._cache_hits += 1
+            record_cache_event(self.name, "hit")
             return list(cached)
 
         self._cache_misses += 1
+        record_cache_event(self.name, "miss")
         await self._limiter.acquire()
-        try:
-            jobs = await asyncio.wait_for(
-                self._connector.search(criteria),
-                timeout=self._timeout_seconds,
-            )
-        except TimeoutError as exc:
-            message = f"request timed out after {self._timeout_seconds:g}s"
-            self._record_failure(message)
-            raise ConnectorError(f"{self.name} {message}") from exc
-        except Exception as exc:
-            self._record_failure(describe_error(exc))
-            raise
+        with self._tracer.start_as_current_span("connector.search") as span:
+            span.set_attribute("connector.name", self.name)
+            span.set_attribute("connector.query", criteria.query or "")
+            started = time.perf_counter()
+            try:
+                jobs = await asyncio.wait_for(
+                    self._connector.search(criteria),
+                    timeout=self._timeout_seconds,
+                )
+            except TimeoutError as exc:
+                message = f"request timed out after {self._timeout_seconds:g}s"
+                self._record_failure(message)
+                span.record_exception(exc)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, "timeout"))
+                record_source_call(self.name, "timeout", (time.perf_counter() - started) * 1000)
+                raise ConnectorError(f"{self.name} {message}") from exc
+            except Exception as exc:
+                self._record_failure(describe_error(exc))
+                span.record_exception(exc)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, type(exc).__name__))
+                record_source_call(self.name, "error", (time.perf_counter() - started) * 1000)
+                raise
 
-        self._record_success()
-        self._cache.set(cache_key, jobs)
-        return jobs
+            self._record_success()
+            self._cache.set(cache_key, jobs)
+            span.set_status(trace.Status(trace.StatusCode.OK))
+            record_source_call(self.name, "success", (time.perf_counter() - started) * 1000)
+            return jobs
 
     async def health(self) -> ConnectorHealth:
         try:

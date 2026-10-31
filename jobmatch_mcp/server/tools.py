@@ -9,8 +9,7 @@ from fastmcp import Context
 from jobmatch_mcp.core.config import Settings, get_settings
 from jobmatch_mcp.core.errors import InvalidInputError, NotFoundError
 from jobmatch_mcp.core.logging import get_logger, request_context
-from opentelemetry import trace
-from jobmatch_mcp.core.telemetry import get_tracer
+from jobmatch_mcp.core.telemetry import tool_span
 from jobmatch_mcp.db.repositories import (
     get_job,
     get_latest_match_for_job,
@@ -44,9 +43,6 @@ from jobmatch_mcp.services.search_service import ProgressCallback, SearchService
 
 logger = get_logger(__name__)
 
-# Tracer for OpenTelemetry spans
-tracer = get_tracer("jobmatch-mcp-tools")
-
 # Tool operation span names
 SPAN_PARSE_RESUME = "tool.parse_resume"
 SPAN_SEARCH_JOBS = "tool.search_jobs"
@@ -54,20 +50,6 @@ SPAN_LIST_SOURCES = "tool.list_sources"
 SPAN_GET_JOB_DETAILS = "tool.get_job_details"
 SPAN_EXPLAIN_MATCH = "tool.explain_match"
 SPAN_GET_PROVIDER_STATUS = "tool.get_provider_status"
-
-def _with_tracer_span(span_name: str, fn, *args, **kwargs):
-    """Execute a function within an OpenTelemetry span."""
-    with tracer.start_as_current_span(span_name) as span:
-        span.set_attribute("operation.name", span_name)
-        try:
-            result = fn(*args, **kwargs)
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
-            return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
-
 
 
 async def parse_resume(
@@ -81,9 +63,7 @@ async def parse_resume(
     """
     settings = get_settings()
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_PARSE_RESUME)
-        span.set_attribute("operation.name", SPAN_PARSE_RESUME)
-        try:
+        with tool_span(SPAN_PARSE_RESUME):
             logger.info(
                 "tool.parse_resume.start",
                 extra={"fields": {"has_path": path is not None, "text_chars": len(text or "")}},
@@ -91,9 +71,13 @@ async def parse_resume(
             async with session_scope() as session:
                 service = ResumeService(
                     settings.max_resume_bytes,
-                    embedding_service=(get_embedding_service() if settings.enable_semantic else None),
+                    embedding_service=(
+                        get_embedding_service() if settings.enable_semantic else None
+                    ),
                 )
-                resume, profile, warnings = await service.parse_and_store(session, path=path, text=text)
+                resume, profile, warnings = await service.parse_and_store(
+                    session, path=path, text=text
+                )
                 result = ParseResumeOutput(resume_id=resume.id, profile=profile, warnings=warnings)
             logger.info(
                 "tool.parse_resume.done",
@@ -105,12 +89,7 @@ async def parse_resume(
                     }
                 },
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def search_jobs(
@@ -150,9 +129,7 @@ async def search_jobs(
     criteria = await _elicit_search_preferences(ctx, settings, criteria)
 
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_SEARCH_JOBS)
-        span.set_attribute("operation.name", SPAN_SEARCH_JOBS)
-        try:
+        with tool_span(SPAN_SEARCH_JOBS):
             logger.info(
                 "tool.search_jobs.start",
                 extra={
@@ -194,20 +171,13 @@ async def search_jobs(
                     }
                 },
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def list_sources() -> ListSourcesOutput:
     """List enabled job sources with health, last success, and rate-limit state."""
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_LIST_SOURCES)
-        span.set_attribute("operation.name", SPAN_LIST_SOURCES)
-        try:
+        with tool_span(SPAN_LIST_SOURCES):
             logger.info(
                 "tool.list_sources.start",
                 extra={"fields": {"request_id": request_id}},
@@ -222,21 +192,13 @@ async def list_sources() -> ListSourcesOutput:
                     }
                 },
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return ListSourcesOutput(sources=statuses)
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def get_job_details(job_id: UUID) -> JobDetailsOutput:
     """Return the full stored record for one job, including the source link."""
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_GET_JOB_DETAILS)
-        span.set_attribute("operation.name", SPAN_GET_JOB_DETAILS)
-        span.set_attribute("job.id", str(job_id))
-        try:
+        with tool_span(SPAN_GET_JOB_DETAILS, {"job.id": str(job_id)}):
             logger.info(
                 "tool.get_job_details.start",
                 extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
@@ -250,12 +212,7 @@ async def get_job_details(job_id: UUID) -> JobDetailsOutput:
                 "tool.get_job_details.done",
                 extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def explain_match(job_id: UUID) -> ExplainMatchOutput:
@@ -265,10 +222,7 @@ async def explain_match(job_id: UUID) -> ExplainMatchOutput:
     score breakdown. Run `search_jobs` first so a match exists.
     """
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_EXPLAIN_MATCH)
-        span.set_attribute("operation.name", SPAN_EXPLAIN_MATCH)
-        span.set_attribute("job.id", str(job_id))
-        try:
+        with tool_span(SPAN_EXPLAIN_MATCH, {"job.id": str(job_id)}):
             logger.info(
                 "tool.explain_match.start",
                 extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
@@ -300,21 +254,14 @@ async def explain_match(job_id: UUID) -> ExplainMatchOutput:
                 "tool.explain_match.done",
                 extra={"fields": {"job_id": str(job_id), "request_id": request_id}},
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def get_provider_status() -> ProviderStatusOutput:
     """Show LLM provider configuration, circuit state, and recent call costs."""
     settings = get_settings()
     with request_context() as request_id:
-        span = tracer.start_as_current_span(SPAN_GET_PROVIDER_STATUS)
-        span.set_attribute("operation.name", SPAN_GET_PROVIDER_STATUS)
-        try:
+        with tool_span(SPAN_GET_PROVIDER_STATUS):
             logger.info(
                 "tool.get_provider_status.start",
                 extra={"fields": {"request_id": request_id}},
@@ -355,12 +302,7 @@ async def get_provider_status() -> ProviderStatusOutput:
                     }
                 },
             )
-            span.set_status(trace.api.Status(trace.api.StatusCode.OK))
             return result
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.api.Status(trace.api.StatusCode.ERROR, str(exc)))
-            raise
 
 
 async def _elicit_search_preferences(

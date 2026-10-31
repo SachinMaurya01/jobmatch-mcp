@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from opentelemetry import trace
 
 from jobmatch_mcp.connectors.base import ConnectorHealth, JobConnector
-from jobmatch_mcp.core.telemetry import get_tracer
 from jobmatch_mcp.connectors.common import (
     annual_salary,
     clean_text,
@@ -58,9 +58,8 @@ class JSearchConnector(JobConnector):
             self._client = None
 
     async def health(self) -> ConnectorHealth:
-        span = self._tracer.start_as_current_span("connector.jsearch.health")
-        span.set_attribute("connector.name", self.name)
-        try:
+        with self._tracer.start_as_current_span("connector.jsearch.health") as span:
+            span.set_attribute("connector.name", self.name)
             if not self._settings.jsearch_configured:
                 return ConnectorHealth(
                     name=self.name,
@@ -72,9 +71,6 @@ class JSearchConnector(JobConnector):
                 ok=True,
                 detail="API key configured (health probe not performed)",
             )
-        finally:
-            span.set_status(trace.Status(trace.StatusCode.OK))
-            span.end()
 
     def _build_query(self, criteria: SearchCriteria) -> str:
         parts: list[str] = []
@@ -97,119 +93,77 @@ class JSearchConnector(JobConnector):
         return params
 
     async def search(self, criteria: SearchCriteria) -> list[RawJob]:
-        span = self._tracer.start_as_current_span("connector.jsearch.search")
-        span.set_attribute("connector.name", self.name)
-        span.set_attribute("connector.query", criteria.query or "")
-        try:
-            if not self._settings.jsearch_configured:
-                raise ConfigurationError("JSearch is not configured. Set JOBMATCH_JSEARCH_API_KEY.")
-
-            url = f"{self._settings.jsearch_base_url.rstrip('/')}/search"
-            headers = {
-                "X-RapidAPI-Key": self._settings.jsearch_api_key or "",
-                "X-RapidAPI-Host": self._settings.jsearch_api_host,
-            }
+        with self._tracer.start_as_current_span("connector.jsearch.search") as span:
+            span.set_attribute("connector.name", self.name)
+            span.set_attribute("connector.query", criteria.query or "")
             try:
-                response = await self._get_client().get(
-                    url,
-                    params=self._build_params(criteria),
-                    headers=headers,
-                )
-            except httpx.HTTPError as exc:
-                # Never interpolate the exception: httpx can include request details.
-                raise ConnectorError(f"JSearch request failed ({type(exc).__name__})") from exc
+                if not self._settings.jsearch_configured:
+                    raise ConfigurationError(
+                        "JSearch is not configured. Set JOBMATCH_JSEARCH_API_KEY."
+                    )
 
-            if response.status_code == 401:
-                raise ConnectorError("JSearch authentication failed; check the RapidAPI key")
-            if response.status_code == 403:
-                raise ConnectorError(
-                    "JSearch access forbidden; check the RapidAPI plan and key permissions"
-                )
-            if response.status_code == 429:
-                raise ConnectorError("JSearch rate limit reached")
-            if response.status_code >= 400:
-                raise ConnectorError(f"JSearch returned HTTP {response.status_code}")
+                url = f"{self._settings.jsearch_base_url.rstrip('/')}/search"
+                headers = {
+                    "X-RapidAPI-Key": self._settings.jsearch_api_key or "",
+                    "X-RapidAPI-Host": self._settings.jsearch_api_host,
+                }
+                try:
+                    response = await self._get_client().get(
+                        url,
+                        params=self._build_params(criteria),
+                        headers=headers,
+                    )
+                except httpx.HTTPError as exc:
+                    # Never interpolate the exception: httpx can include request details.
+                    raise ConnectorError(f"JSearch request failed ({type(exc).__name__})") from exc
 
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise ConnectorError("JSearch returned a non-JSON response") from exc
+                if response.status_code == 401:
+                    raise ConnectorError("JSearch authentication failed; check the RapidAPI key")
+                if response.status_code == 403:
+                    raise ConnectorError(
+                        "JSearch access forbidden; check the RapidAPI plan and key permissions"
+                    )
+                if response.status_code == 429:
+                    raise ConnectorError("JSearch rate limit reached")
+                if response.status_code >= 400:
+                    raise ConnectorError(f"JSearch returned HTTP {response.status_code}")
 
-            if not isinstance(payload, dict):
-                raise ConnectorError("JSearch returned an unexpected response")
-            status = payload.get("status")
-            if isinstance(status, str) and status.upper() != "OK":
-                raise ConnectorError(f"JSearch returned status {status[:40]}")
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise ConnectorError("JSearch returned a non-JSON response") from exc
 
-            span.set_attribute("connector.response_status", response.status_code)
+                if not isinstance(payload, dict):
+                    raise ConnectorError("JSearch returned an unexpected response")
+                status = payload.get("status")
+                if isinstance(status, str) and status.upper() != "OK":
+                    raise ConnectorError(f"JSearch returned status {status[:40]}")
 
-            raw_results = payload.get("data", [])
-            if not isinstance(raw_results, list):
-                raw_results = []
+                span.set_attribute("connector.response_status", response.status_code)
 
-            jobs: list[RawJob] = []
-            for item in raw_results:
-                parsed = self._parse_result(item)
-                if parsed is None:
-                    continue
-                if criteria.remote is True and not parsed.remote:
-                    continue
-                if criteria.remote is False and parsed.remote:
-                    continue
-                if criteria.min_salary is not None and criteria.min_salary > 0:
-                    best_known = parsed.salary_max or parsed.salary_min
-                    if best_known is not None and best_known < criteria.min_salary:
+                raw_results = payload.get("data", [])
+                if not isinstance(raw_results, list):
+                    raw_results = []
+
+                jobs: list[RawJob] = []
+                for item in raw_results:
+                    parsed = self._parse_result(item)
+                    if parsed is None:
                         continue
-                jobs.append(parsed)
-            return jobs
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            span.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
-            raise
-        finally:
-            span.end()
-
-        if response.status_code == 401:
-            raise ConnectorError("JSearch authentication failed; check the RapidAPI key")
-        if response.status_code == 403:
-            raise ConnectorError(
-                "JSearch access forbidden; check the RapidAPI plan and key permissions"
-            )
-        if response.status_code == 429:
-            raise ConnectorError("JSearch rate limit reached")
-        if response.status_code >= 400:
-            raise ConnectorError(f"JSearch returned HTTP {response.status_code}")
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise ConnectorError("JSearch returned a non-JSON response") from exc
-
-        if not isinstance(payload, dict):
-            raise ConnectorError("JSearch returned an unexpected response")
-        status = payload.get("status")
-        if isinstance(status, str) and status.upper() != "OK":
-            raise ConnectorError(f"JSearch returned status {status[:40]}")
-
-        raw_results = payload.get("data", [])
-        if not isinstance(raw_results, list):
-            raw_results = []
-
-        jobs: list[RawJob] = []
-        for item in raw_results:
-            parsed = self._parse_result(item)
-            if parsed is None:
-                continue
-            if criteria.remote is True and not parsed.remote:
-                continue
-            if criteria.remote is False and parsed.remote:
-                continue
-            if criteria.min_salary is not None and criteria.min_salary > 0:
-                best_known = parsed.salary_max or parsed.salary_min
-                if best_known is not None and best_known < criteria.min_salary:
-                    continue
-            jobs.append(parsed)
-        return jobs
+                    if criteria.remote is True and not parsed.remote:
+                        continue
+                    if criteria.remote is False and parsed.remote:
+                        continue
+                    if criteria.min_salary is not None and criteria.min_salary > 0:
+                        best_known = parsed.salary_max or parsed.salary_min
+                        if best_known is not None and best_known < criteria.min_salary:
+                            continue
+                    jobs.append(parsed)
+                return jobs
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, type(exc).__name__))
+                raise
 
     def _parse_result(self, item: Any) -> RawJob | None:
         if not isinstance(item, dict):

@@ -5,9 +5,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import ClassVar
 
+from opentelemetry import trace
 from pydantic import BaseModel
 
-from opentelemetry import trace
 from jobmatch_mcp.schemas import RawJob, SearchCriteria
 
 

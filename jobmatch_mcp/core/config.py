@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     app_env: Literal["local", "test", "prod"] = "local"
     log_level: str = "INFO"
 
+    otel_enabled: bool = True
+    otel_service_name: str = "jobmatch-mcp"
+    otel_exporter: Literal["none", "console", "otlp"] = "none"
+    otel_endpoint: str | None = None
+    otel_metrics_interval_seconds: float = Field(default=30.0, gt=0.0)
+
     database_url: str = "postgresql+psycopg://jobmatch:jobmatch@localhost:5432/jobmatch"
 
     jsearch_api_key: str | None = None

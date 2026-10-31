@@ -8,6 +8,7 @@ import asyncio
 from jobmatch_mcp.core.config import get_settings
 from jobmatch_mcp.core.errors import ConfigurationError
 from jobmatch_mcp.core.logging import configure_logging
+from jobmatch_mcp.core.telemetry import setup_telemetry, shutdown_telemetry
 
 
 def main() -> None:
@@ -20,6 +21,7 @@ def main() -> None:
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    setup_telemetry(settings)
     transport = args.transport or settings.transport
 
     from jobmatch_mcp.server.app import mcp
@@ -43,7 +45,10 @@ def main() -> None:
         else:
             mcp.run(transport="stdio", show_banner=False)
     finally:
-        asyncio.run(close_dependencies())
+        try:
+            asyncio.run(close_dependencies())
+        finally:
+            shutdown_telemetry()
 
 
 if __name__ == "__main__":

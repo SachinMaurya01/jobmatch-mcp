@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import StaticTokenVerifier
+from sqlalchemy import text
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from jobmatch_mcp.core.config import Settings, get_settings
+from jobmatch_mcp.db.session import session_scope
 from jobmatch_mcp.server.prompts import compare_top_matches, find_jobs_for_resume
 from jobmatch_mcp.server.resources import current_resume, job, search
 from jobmatch_mcp.server.tools import (
@@ -72,6 +76,19 @@ def build_app(settings: Settings | None = None) -> FastMCP:
 
     mcp.prompt(find_jobs_for_resume)
     mcp.prompt(compare_top_matches)
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> JSONResponse:
+        """Liveness probe reporting database reachability."""
+        try:
+            async with session_scope() as session:
+                await session.execute(text("SELECT 1"))
+            body = {"status": "ok", "database": "ok"}
+            status_code = 200
+        except Exception:
+            body = {"status": "degraded", "database": "unavailable"}
+            status_code = 503
+        return JSONResponse(body, status_code=status_code)
 
     return mcp
 

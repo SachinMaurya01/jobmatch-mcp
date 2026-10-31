@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
-
 from opentelemetry import trace
+
 from jobmatch_mcp.core.errors import LLMOutputError, LLMUnavailableError, describe_error
-from jobmatch_mcp.core.telemetry import get_tracer
-from jobmatch_mcp.llm.base import LLMProvider
+from jobmatch_mcp.core.telemetry import record_fallback, record_llm_call
+from jobmatch_mcp.llm.base import LLMProvider, LLMResponse
 from jobmatch_mcp.llm.circuit import CircuitBreaker
 from jobmatch_mcp.schemas import LLMCallRecord, ProviderStatus
 
@@ -68,6 +69,54 @@ class LLMRouter:
     def _allowed_providers(self) -> list[LLMProvider]:
         return [provider for provider in self._providers if self._allowed(provider)]
 
+    async def _call_provider(
+        self,
+        provider: LLMProvider,
+        *,
+        system: str,
+        user: str,
+        schema: dict[str, Any],
+        schema_name: str,
+    ) -> LLMResponse:
+        with self._tracer.start_as_current_span("llm.generate_structured") as span:
+            span.set_attribute("llm.provider", provider.name)
+            span.set_attribute("llm.model", provider.model)
+            span.set_attribute("llm.hosted", provider.hosted)
+            span.set_attribute("llm.schema", schema_name)
+            started = time.perf_counter()
+            try:
+                response = await provider.generate_structured(
+                    system=system,
+                    user=user,
+                    schema=schema,
+                    schema_name=schema_name,
+                )
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                span.record_exception(exc)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, type(exc).__name__))
+                record_llm_call(
+                    provider.name,
+                    provider.model,
+                    "error",
+                    elapsed_ms,
+                    0,
+                    0,
+                    0.0,
+                )
+                raise
+            span.set_status(trace.Status(trace.StatusCode.OK))
+            record_llm_call(
+                provider.name,
+                provider.model,
+                "success",
+                response.latency_ms,
+                response.tokens_in,
+                response.tokens_out,
+                response.cost_estimate,
+            )
+            return response
+
     async def generate_structured(
         self,
         *,
@@ -89,13 +138,15 @@ class LLMRouter:
             breaker = self._breakers[provider.name]
             if not breaker.allow_request():
                 reason = "circuit_open"
+                record_fallback(provider.name, reason)
                 calls.append(self._call_record(provider, status="skipped", reason=reason))
                 reasons.append(f"{provider.name}: {reason}")
                 continue
 
             for attempt in range(2):
                 try:
-                    response = await provider.generate_structured(
+                    response = await self._call_provider(
+                        provider,
                         system=system,
                         user=user,
                         schema=schema,
@@ -107,6 +158,7 @@ class LLMRouter:
                     reason = str(exc)
                     breaker.record_failure()
                     self._record_failure(provider.name, reason)
+                    record_fallback(provider.name, "invalid_output")
                     calls.append(self._call_record(provider, status="error", reason=reason))
                     reasons.append(f"{provider.name}: {reason}")
                     if attempt == 0:
@@ -116,6 +168,7 @@ class LLMRouter:
                     reason = _failure_reason(exc)
                     breaker.record_failure()
                     self._record_failure(provider.name, reason)
+                    record_fallback(provider.name, reason)
                     calls.append(self._call_record(provider, status="error", reason=reason))
                     reasons.append(f"{provider.name}: {reason}")
                     break

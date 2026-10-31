@@ -312,10 +312,37 @@ Multi-source searches send progress updates to clients that support them.
 
 ## Observability
 
-- Structured JSON logs with request IDs on every tool call.
-- Redaction of emails, phone numbers, tokens, and resume text.
-- Per-source health and cache statistics via `list_sources`.
-- Per-provider latency, circuit state, and cost via `get_provider_status`.
+- **Structured JSON logs** on stderr with `request_id`, `trace_id`, and
+  `span_id` on every record. Emails, phone numbers, bearer tokens, and
+  credential-like fields are redacted before serialization.
+- **OpenTelemetry traces** for every tool call, connector search, LLM attempt,
+  and database session. Exporters are opt-in (`none`, `console`, or OTLP over
+  gRPC/HTTP) and never required for local runs.
+- **OpenTelemetry metrics** for tool latency and counts, connector latency,
+  cache hits/misses, LLM latency/tokens/estimated cost, fallbacks, and database
+  session latency.
+- **Health endpoint** at `/health` on the HTTP transport. It runs `SELECT 1`
+  and returns `200` when the database is reachable, otherwise `503`.
+- **Per-source health** and cache statistics via `list_sources`.
+- **Per-provider latency**, circuit state, and cost via `get_provider_status`.
+
+Enable a local console exporter while debugging:
+
+```bash
+JOBMATCH_OTEL_EXPORTER=console uv run python -m jobmatch_mcp
+```
+
+Point at a collector:
+
+```bash
+JOBMATCH_OTEL_EXPORTER=otlp \
+JOBMATCH_OTEL_ENDPOINT=http://127.0.0.1:4317 \
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+uv run python -m jobmatch_mcp
+```
+
+See [docs/runbook.md](docs/runbook.md) for span and metric names, failure
+drills, and security scans, and [docs/adr](docs/adr) for the design records.
 
 ## Development
 
@@ -353,7 +380,8 @@ Without a test database, integration tests are skipped.
 
 | Layer | Location | Coverage |
 |---|---|---|
-| Unit | `tests/unit/` | Scoring, dedupe, circuit breaker, router, connectors, config, redaction, resume parsing, transport |
+| Unit | `tests/unit/` | Scoring, dedupe, circuit breaker, router, connectors, config, redaction, resume parsing, transport, telemetry, prompt injection |
+| Resilience | `tests/unit/test_resilience.py` | Concurrent timeouts, degraded sources, cache under load, concurrent LLM failures |
 | Integration | `tests/integration/` | Repositories and end-to-end tool flow against PostgreSQL with pgvector |
 | Ranking evaluation | `tests/eval/` | Ranking quality checks |
 | MCP protocol | `tests/unit/test_protocol.py` | Tool listing and calls over the MCP protocol |
