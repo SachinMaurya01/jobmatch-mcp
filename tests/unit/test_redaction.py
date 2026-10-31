@@ -24,3 +24,17 @@ def test_redacts_nested_structures() -> None:
     redacted = redact_value(value)
     assert redacted["email"] == "[redacted-email]"
     assert "555" not in redacted["items"][0]
+
+
+def test_redacts_credentials_by_key_and_bearer_token() -> None:
+    value = {
+        "api_key": "abc123",
+        "authorization": "Bearer abc.def",
+        "nested": [{"password": "hunter2"}],
+        "note": "send Authorization: Bearer xyz.123 now",
+    }
+    redacted = redact_value(value)
+    assert redacted["api_key"] == "[redacted-secret]"
+    assert redacted["authorization"] == "[redacted-secret]"
+    assert redacted["nested"][0]["password"] == "[redacted-secret]"
+    assert "xyz.123" not in redacted["note"]
