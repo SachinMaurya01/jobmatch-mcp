@@ -20,5 +20,3 @@ datasources:
     jsonData:
       tracesToMetrics:
         datasourceUid: prometheus
-      serviceMap:
-        datasourceUid: prometheus

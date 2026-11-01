@@ -87,6 +87,68 @@ debugging.
 | `llm.fallbacks` | counter | `provider`, `reason` |
 | `db.query.duration` | histogram (ms) | `operation`, `status` |
 
+## Grafana stack
+
+`deploy/observability/` contains a local Prometheus + Tempo + Grafana stack with
+provisioned datasources and the **JobMatch MCP — Live Traces & Metrics**
+dashboard (`uid: jobmatch-mcp-live`).
+
+```bash
+docker compose -f deploy/observability/docker-compose.yml up -d
+```
+
+| Service | URL | Purpose |
+|---|---|---|
+| Grafana | http://localhost:3000 | Dashboards (anonymous admin in this local stack) |
+| Prometheus | http://localhost:9090 | Metric storage and ad-hoc queries |
+| Tempo | http://localhost:3200 | Trace storage |
+| OTel Collector | `localhost:4317` (gRPC), `localhost:4318` (HTTP) | OTLP ingest |
+
+Point the MCP server at the collector and restart it:
+
+```bash
+JOBMATCH_OTEL_EXPORTER=otlp
+JOBMATCH_OTEL_ENDPOINT=http://127.0.0.1:4317
+```
+
+When the server and collector share a Compose network, use
+`http://otel-collector:4317` instead.
+
+The dashboard refreshes every 10 seconds and covers tool calls/errors/latency,
+connector calls/latency/cache, LLM calls/latency/tokens/cost/fallbacks, database
+session latency, and a Tempo trace list filtered to `service.name=jobmatch-mcp`.
+Use Grafana Explore to open any trace and jump to related metrics through the
+provisioned Tempo → Prometheus link.
+
+Metric naming in Prometheus replaces dots with underscores. The collector sets
+`add_metric_suffixes: false`, so counters keep their OTel names (for example
+`mcp_tool_calls`) and histograms use `_bucket`, `_sum`, and `_count`. The
+dashboard queries accept both this form and the default Prometheus `_total` /
+unit suffixes, so it also works if you point it at a collector with suffix
+translation enabled.
+
+### No data in Grafana
+
+1. Confirm the app exports OTLP: `JOBMATCH_OTEL_EXPORTER=otlp` and a reachable
+   `JOBMATCH_OTEL_ENDPOINT`, then restart the server.
+2. Check the collector logs:
+   `docker compose -f deploy/observability/docker-compose.yml logs -f otel-collector`.
+3. Query Prometheus directly: `curl -s localhost:8889/metrics | grep mcp_tool`.
+4. In Prometheus, run `count({__name__=~"mcp_.*"})`. An empty result means no
+   metrics arrived; a non-empty result means the datasource URL or dashboard
+   time range is wrong.
+5. For empty traces, generate traffic, then in Tempo/Grafana Explore search
+   `{ resource.service.name = "jobmatch-mcp" }` with a `now-1h` range.
+
+### Reset the local stack
+
+```bash
+docker compose -f deploy/observability/docker-compose.yml down -v
+```
+
+This deletes the Prometheus, Tempo, and Grafana volumes. Do not use `-v` against
+a shared or production stack.
+
 ## Failure drills
 
 These run without external services:

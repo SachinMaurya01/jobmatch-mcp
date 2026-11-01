@@ -28,6 +28,9 @@ services:
 
   tempo:
     image: grafana/tempo:2.7.2
+    # Local-only stack: the named volume is root-owned, so Tempo writes to it as
+    # root. Do not reuse this compose file for shared or production deployments.
+    user: "0:0"
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro

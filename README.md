@@ -344,6 +344,42 @@ uv run python -m jobmatch_mcp
 See [docs/runbook.md](docs/runbook.md) for span and metric names, failure
 drills, and security scans, and [docs/adr](docs/adr) for the design records.
 
+### Grafana stack (traces and metrics)
+
+A self-contained Prometheus + Tempo + Grafana stack and a provisioned dashboard
+live in `deploy/observability/`:
+
+```bash
+docker compose -f deploy/observability/docker-compose.yml up -d
+```
+
+Run the MCP server with OTLP export to the collector:
+
+```bash
+JOBMATCH_OTEL_EXPORTER=otlp \
+JOBMATCH_OTEL_ENDPOINT=http://127.0.0.1:4317 \
+uv run python -m jobmatch_mcp --transport http
+```
+
+Open http://localhost:3000 and choose **JobMatch → JobMatch MCP — Live Traces &
+Metrics**. The local stack allows anonymous admin access, refreshes every 10
+seconds, and includes overview stats, tool/connector/LLM/database latency and
+error panels, token and cost rates, cache hit ratio, and a Tempo trace list.
+Prometheus is at http://localhost:9090 and Tempo at http://localhost:3200.
+
+The collector listens on `4317` (gRPC) and `4318` (HTTP), publishes metrics on
+`:8889`, and forwards traces to Tempo. When the MCP server runs in the same
+Compose network, set `JOBMATCH_OTEL_ENDPOINT=http://otel-collector:4317`.
+
+To stop the stack without deleting its data:
+
+```bash
+docker compose -f deploy/observability/docker-compose.yml down
+```
+
+Add `-v` only when you intentionally want to discard Prometheus, Tempo, and
+Grafana volumes.
+
 ## Development
 
 ### Common commands
