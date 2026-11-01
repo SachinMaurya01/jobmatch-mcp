@@ -41,6 +41,9 @@ It is built with Python, [FastMCP](https://gofastmcp.com), PostgreSQL with pgvec
 - **Full MCP surface:** tools, resources, prompts, elicitation, progress notifications, cancellation, and versioned structured outputs.
 - **Secret-safe errors and log redaction** for emails, phone numbers, and tokens.
 
+  <img width="1811" height="935" alt="Screenshot From 2026-11-01 14-51-45" src="https://github.com/user-attachments/assets/5847321b-15bc-4f8a-84d6-b41fc57943b9" />
+
+
 ## How it works
 
 ```
