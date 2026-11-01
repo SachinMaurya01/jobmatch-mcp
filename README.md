@@ -41,7 +41,7 @@ It is built with Python, [FastMCP](https://gofastmcp.com), PostgreSQL with pgvec
 - **Full MCP surface:** tools, resources, prompts, elicitation, progress notifications, cancellation, and versioned structured outputs.
 - **Secret-safe errors and log redaction** for emails, phone numbers, and tokens.
 
-  <img width="1811" height="935" alt="Screenshot From 2026-11-01 14-51-45" src="https://github.com/user-attachments/assets/5847321b-15bc-4f8a-84d6-b41fc57943b9" />
+<img width="1745" height="901" alt="Grafana JobMatch Live Metrics Dashboard" src="https://github.com/user-attachments/assets/ad7d406a-c9e6-48b8-8923-005d65b26427" />
 
 
 ## How it works
